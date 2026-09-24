@@ -1,0 +1,12 @@
+.env
+google-key.json
+*.json
+__pycache__/
+.venv/
+transcript_cache.json
+first_response.json
+links_input.txt
+_build/
+_proto/
+口播卡片*/
+*.docx

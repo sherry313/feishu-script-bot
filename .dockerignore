@@ -1,0 +1,13 @@
+.env
+.git
+.venv
+__pycache__
+*.pyc
+*.json
+transcript_cache.json
+pipeline_tasks.json
+feishu_rewrite_*.json
+rewrite_batch_*.json
+original_extract_tasks.json
+google-key.json
+serverceaccount824.json
