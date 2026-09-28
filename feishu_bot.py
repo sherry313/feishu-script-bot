@@ -6,6 +6,7 @@ work is moved to a background thread so Feishu receives an immediate HTTP 200.
 import json
 import os
 import re
+import logging
 import subprocess
 import sys
 import threading
@@ -18,6 +19,7 @@ from fastapi.responses import JSONResponse
 from feishu_sync import API, Feishu, TABLE_URL, text_value
 
 app = FastAPI(title='口播稿助手')
+logger = logging.getLogger('uvicorn.error')
 _seen_message_ids = set()
 _seen_lock = threading.Lock()
 _job_lock = threading.Lock()
@@ -85,11 +87,14 @@ def reply_for(text):
     # should be matched against what the user wrote after the mention.
     command_text = re.sub(r'<at\b[^>]*>.*?</at>', '', text, flags=re.IGNORECASE | re.DOTALL)
     normalized = command_text.strip().lower().replace(' ', '')
-    if normalized in {'帮助', 'help', '/help', '开始'}:
+    # Feishu can also use an opaque @ placeholder rather than an <at> tag.
+    # This handler is only reached for a group mention (or a direct message),
+    # so matching commands within the remaining text is safe and resilient.
+    if normalized in {'帮助', 'help', '/help', '开始'} or '帮助' in normalized or 'help' in normalized:
         return '我是口播稿助手。\n发送“状态”查看进度；发送“跑一条”处理下一条未完成文案。'
-    if normalized in {'状态', 'status', '/status'}:
+    if normalized in {'状态', 'status', '/status'} or '状态' in normalized or 'status' in normalized:
         return status_text()
-    if normalized in {'表格', 'table'}:
+    if normalized in {'表格', 'table'} or '表格' in normalized or 'table' in normalized:
         return TABLE_URL
     return None
 
@@ -130,6 +135,8 @@ async def feishu_events(request: Request, background_tasks: BackgroundTasks):
     chat_id = message.get('chat_id')
     if not chat_id:
         return {'ok': True}
+    logger.info('Feishu message received: chat_type=%s mentions=%s text=%r',
+                message.get('chat_type'), bool(message.get('mentions')), text[:200])
     # Group conversations require a mention; otherwise the bot stays quiet.
     if message.get('chat_type') == 'group' and not message.get('mentions'):
         return {'ok': True}
