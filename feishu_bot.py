@@ -5,6 +5,7 @@ work is moved to a background thread so Feishu receives an immediate HTTP 200.
 """
 import json
 import os
+import re
 import subprocess
 import sys
 import threading
@@ -79,7 +80,11 @@ def run_next_job(chat_id=None):
 
 
 def reply_for(text):
-    normalized = text.strip().lower().replace(' ', '')
+    # In a group event, Feishu represents an @ mention inside the text payload
+    # (for example: <at user_id="ou_xxx">口播稿助手</at> 帮助).  Commands
+    # should be matched against what the user wrote after the mention.
+    command_text = re.sub(r'<at\b[^>]*>.*?</at>', '', text, flags=re.IGNORECASE | re.DOTALL)
+    normalized = command_text.strip().lower().replace(' ', '')
     if normalized in {'帮助', 'help', '/help', '开始'}:
         return '我是口播稿助手。\n发送“状态”查看进度；发送“跑一条”处理下一条未完成文案。'
     if normalized in {'状态', 'status', '/status'}:
