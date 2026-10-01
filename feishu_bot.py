@@ -27,17 +27,29 @@ _job_lock = threading.Lock()
 
 def send_text(chat_id, text):
     """Send one ordinary text reply to the same Feishu chat."""
-    client = Feishu()
-    response = client.session.post(
+    app_id = os.getenv('FEISHU_APP_ID', '').strip()
+    app_secret = os.getenv('FEISHU_APP_SECRET', '').strip()
+    if not app_id or not app_secret:
+        raise RuntimeError('机器人缺少 FEISHU_APP_ID 或 FEISHU_APP_SECRET。')
+    token_response = requests.post(
+        API + '/auth/v3/tenant_access_token/internal',
+        json={'app_id': app_id, 'app_secret': app_secret}, timeout=30,
+    )
+    token_body = token_response.json()
+    token = token_body.get('tenant_access_token')
+    if not token_response.ok or token_body.get('code') != 0 or not token:
+        raise RuntimeError('无法获取飞书应用访问令牌。')
+    response = requests.post(
         API + '/im/v1/messages',
         params={'receive_id_type': 'chat_id'},
+        headers={'Authorization': f'Bearer {token}'},
         json={'receive_id': chat_id, 'msg_type': 'text',
               'content': json.dumps({'text': text}, ensure_ascii=False)},
         timeout=30,
     )
     body = response.json()
     if not response.ok or body.get('code') != 0:
-        raise RuntimeError('飞书消息发送失败')
+        raise RuntimeError(f'飞书消息发送失败（HTTP {response.status_code}，错误码 {body.get("code")}）')
 
 
 def status_text():
