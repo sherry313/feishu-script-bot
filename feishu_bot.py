@@ -17,6 +17,9 @@ from fastapi import BackgroundTasks, FastAPI, HTTPException, Request
 from fastapi.responses import JSONResponse
 
 from feishu_sync import API, Feishu, TABLE_URL, text_value
+from avatar_video_workflow import (apply_job_callback, avatar_card,
+                                   parse_card_action, parse_script_number,
+                                   script_record, submit_video_job)
 
 app = FastAPI(title='口播稿助手')
 logger = logging.getLogger('uvicorn.error')
@@ -50,6 +53,53 @@ def send_text(chat_id, text):
     body = response.json()
     if not response.ok or body.get('code') != 0:
         raise RuntimeError(f'飞书消息发送失败（HTTP {response.status_code}，错误码 {body.get("code")}）')
+
+
+def send_card(chat_id, card):
+    """Send an interactive Avatar picker to the same Feishu chat."""
+    app_id = os.getenv('FEISHU_APP_ID', '').strip()
+    app_secret = os.getenv('FEISHU_APP_SECRET', '').strip()
+    token_response = requests.post(
+        API + '/auth/v3/tenant_access_token/internal',
+        json={'app_id': app_id, 'app_secret': app_secret}, timeout=30,
+    )
+    token_body = token_response.json()
+    token = token_body.get('tenant_access_token')
+    if not token_response.ok or token_body.get('code') != 0 or not token:
+        raise RuntimeError('无法获取飞书应用访问令牌。')
+    response = requests.post(
+        API + '/im/v1/messages', params={'receive_id_type': 'chat_id'},
+        headers={'Authorization': f'Bearer {token}'},
+        json={'receive_id': chat_id, 'msg_type': 'interactive',
+              'content': json.dumps(card, ensure_ascii=False)}, timeout=30,
+    )
+    body = response.json()
+    if not response.ok or body.get('code') != 0:
+        raise RuntimeError('飞书选择卡片发送失败。')
+
+
+def send_avatar_picker(chat_id, number):
+    try:
+        record = script_record(Feishu(), number)
+        if record['status'] in {'生成中', '已生成'}:
+            send_text(chat_id, f'脚本 {number} 当前状态是“{record["status"]}”，不会重复提交。')
+            return
+        send_card(chat_id, avatar_card(record))
+    except Exception as exc:
+        logger.exception('Failed to prepare avatar picker')
+        send_text(chat_id, str(exc))
+
+
+def run_avatar_selection(chat_id, action):
+    try:
+        result = submit_video_job(Feishu(), action)
+        if result['duplicate']:
+            send_text(chat_id, f'这条任务已经是“{result["status"]}”，没有重复提交。')
+        else:
+            send_text(chat_id, f'已选择{result["avatar_label"]}，视频开始生成。完成后会回填到原表格。')
+    except Exception as exc:
+        logger.exception('Avatar video submission failed')
+        send_text(chat_id, str(exc))
 
 
 def status_text():
@@ -103,7 +153,8 @@ def reply_for(text):
     # This handler is only reached for a group mention (or a direct message),
     # so matching commands within the remaining text is safe and resilient.
     if normalized in {'帮助', 'help', '/help', '开始'} or '帮助' in normalized or 'help' in normalized:
-        return '我是口播稿助手。\n发送“状态”查看进度；发送“跑一条”处理下一条未完成文案。'
+        return ('我是口播稿助手。\n发送“状态”查看进度；发送“跑一条”处理下一条未完成文案；'
+                '发送“跑脚本27”选择数字人并生成第 27 条视频。')
     if normalized in {'状态', 'status', '/status'} or '状态' in normalized or 'status' in normalized:
         return status_text()
     if normalized in {'表格', 'table'} or '表格' in normalized or 'table' in normalized:
@@ -127,6 +178,14 @@ async def feishu_events(request: Request, background_tasks: BackgroundTasks):
         return JSONResponse({'challenge': payload.get('challenge', '')})
 
     header = payload.get('header') or {}
+    if header.get('event_type') == 'card.action.trigger' or payload.get('action'):
+        action = parse_card_action(payload)
+        if action:
+            chat_id = action.get('chat_id', '')
+            if chat_id:
+                background_tasks.add_task(run_avatar_selection, chat_id, action)
+            return {'toast': {'type': 'success', 'content': '已收到，只提交一次'}}
+        return {'ok': True}
     if header.get('event_type') != 'im.message.receive_v1':
         return {'ok': True}
     event = payload.get('event') or {}
@@ -156,6 +215,10 @@ async def feishu_events(request: Request, background_tasks: BackgroundTasks):
         background_tasks.add_task(send_text, chat_id, '收到，开始处理下一条未完成文案。')
         background_tasks.add_task(run_next, chat_id)
         return {'ok': True}
+    script_number = parse_script_number(text)
+    if script_number:
+        background_tasks.add_task(send_avatar_picker, chat_id, script_number)
+        return {'ok': True}
     response = reply_for(text)
     if response:
         background_tasks.add_task(send_text, chat_id, response)
@@ -171,3 +234,17 @@ async def daily_job(request: Request, background_tasks: BackgroundTasks):
         raise HTTPException(status_code=403, detail='unauthorized')
     background_tasks.add_task(run_next_job)
     return {'accepted': True}
+
+
+@app.post('/avatar/jobs/callback')
+async def avatar_job_callback(request: Request, background_tasks: BackgroundTasks):
+    body = await request.json()
+    try:
+        fields = apply_job_callback(Feishu(), body)
+    except PermissionError:
+        raise HTTPException(status_code=403, detail='unauthorized')
+    chat_id = str(body.get('chat_id', '')).strip()
+    if chat_id:
+        message = '视频已生成并回填到原表格。' if fields['生成状态'] == '已生成' else '视频生成失败，没有自动重试。'
+        background_tasks.add_task(send_text, chat_id, message + '\n' + TABLE_URL)
+    return {'ok': True}
