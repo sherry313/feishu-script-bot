@@ -4,7 +4,7 @@ from unittest.mock import patch
 
 from avatar_video_workflow import (avatar_card, avatar_choices,
                                    command_without_mention, parse_card_action,
-                                   parse_script_number)
+                                   parse_script_number, generation_script)
 
 
 class AvatarVideoWorkflowTests(unittest.TestCase):
@@ -49,6 +49,14 @@ class AvatarVideoWorkflowTests(unittest.TestCase):
             'record_id': 'rec1', 'script_number': 27,
             'avatar_key': 'avatar_b', 'chat_id': 'oc_1',
         })
+
+    def test_video_always_uses_first_rewrite(self):
+        fields = {'口播稿': '原始口播稿', '改写一': '最终用于生成的视频文案',
+                  '改写二': '另一版改写'}
+        self.assertEqual(generation_script(fields), '最终用于生成的视频文案')
+
+    def test_missing_first_rewrite_does_not_fall_back(self):
+        self.assertEqual(generation_script({'口播稿': '原始口播稿'}), '')
 
 
 if __name__ == '__main__':

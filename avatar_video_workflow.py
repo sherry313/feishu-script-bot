@@ -76,15 +76,20 @@ def records_in_view(client):
         params['page_token'] = token
 
 
+def generation_script(fields):
+    """Video commands always use the finalized first rewrite, never the source script."""
+    return text_value((fields or {}).get('改写一')).strip()
+
+
 def script_record(client, number):
     rows = records_in_view(client)
     if number > len(rows):
         raise RuntimeError(f'当前视图只有 {len(rows)} 条，找不到脚本 {number}。')
     record = rows[number - 1]
     fields = record.get('fields', {})
-    script = text_value(fields.get('口播稿')).strip()
+    script = generation_script(fields)
     if not script:
-        raise RuntimeError(f'脚本 {number} 的“口播稿”是空的。')
+        raise RuntimeError(f'脚本 {number} 的“改写一”是空的，任务没有提交。')
     return {
         'record_id': record['record_id'],
         'number': number,
@@ -165,9 +170,9 @@ def submit_video_job(client, action):
         existing_url = fields.get('HeyGen 成片链接')
         if status in {'生成中', '已生成'} or existing_url:
             return {'duplicate': True, 'status': status or '已生成'}
-        script = text_value(fields.get('口播稿')).strip()
+        script = generation_script(fields)
         if not script:
-            raise RuntimeError('这条记录的口播稿为空，任务没有提交。')
+            raise RuntimeError('这条记录的“改写一”为空，任务没有提交。')
 
         # Mark first.  There is deliberately no automatic retry if the remote
         # result is ambiguous; a human may explicitly submit again after failure.
