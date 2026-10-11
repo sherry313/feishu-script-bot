@@ -21,6 +21,9 @@ _record_locks_guard = threading.Lock()
 def command_without_mention(text):
     text = re.sub(r'<at\b[^>]*>.*?</at>', '', text or '',
                   flags=re.IGNORECASE | re.DOTALL)
+    # Feishu group webhooks may replace the mention with an opaque placeholder
+    # such as "@_user_1" instead of an HTML <at> tag.
+    text = re.sub(r'@_user_\d+', '', text, flags=re.IGNORECASE)
     return re.sub(r'\s+', '', text).strip()
 
 

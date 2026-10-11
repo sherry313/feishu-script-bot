@@ -13,6 +13,12 @@ class AvatarVideoWorkflowTests(unittest.TestCase):
         self.assertEqual(command_without_mention(text), '跑脚本27')
         self.assertEqual(parse_script_number(text), 27)
 
+    def test_parse_script_number_with_feishu_opaque_mention(self):
+        # This is the exact text shape observed in the production webhook.
+        text = '@_user_1 跑脚本 27'
+        self.assertEqual(command_without_mention(text), '跑脚本27')
+        self.assertEqual(parse_script_number(text), 27)
+
     def test_rejects_loose_or_zero_commands(self):
         self.assertIsNone(parse_script_number('请跑脚本27吧'))
         self.assertIsNone(parse_script_number('跑脚本0'))

@@ -17,7 +17,7 @@ from fastapi import BackgroundTasks, FastAPI, HTTPException, Request
 from fastapi.responses import JSONResponse
 
 from feishu_sync import API, Feishu, TABLE_URL, text_value
-from avatar_video_workflow import (apply_job_callback, avatar_card,
+from avatar_video_workflow import (apply_job_callback, avatar_card, command_without_mention,
                                    parse_card_action, parse_script_number,
                                    script_record, submit_video_job)
 
@@ -211,7 +211,7 @@ async def feishu_events(request: Request, background_tasks: BackgroundTasks):
     # Group conversations require a mention; otherwise the bot stays quiet.
     if message.get('chat_type') == 'group' and not message.get('mentions'):
         return {'ok': True}
-    if text.strip().replace(' ', '') in {'跑一条', 'runone', '/run'}:
+    if command_without_mention(text).lower() in {'跑一条', 'runone', '/run'}:
         background_tasks.add_task(send_text, chat_id, '收到，开始处理下一条未完成文案。')
         background_tasks.add_task(run_next, chat_id)
         return {'ok': True}
