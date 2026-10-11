@@ -20,6 +20,7 @@ from feishu_sync import API, Feishu, TABLE_URL, text_value
 from avatar_video_workflow import (apply_job_callback, avatar_card, command_without_mention,
                                    parse_card_action, parse_script_number,
                                    script_record, submit_video_job)
+from heygen_video_service import accepted_job_id, wait_and_callback
 
 app = FastAPI(title='口播稿助手')
 logger = logging.getLogger('uvicorn.error')
@@ -248,3 +249,19 @@ async def avatar_job_callback(request: Request, background_tasks: BackgroundTask
         message = '视频已生成并回填到原表格。' if fields['生成状态'] == '已生成' else '视频生成失败，没有自动重试。'
         background_tasks.add_task(send_text, chat_id, message + '\n' + TABLE_URL)
     return {'ok': True}
+
+
+@app.post('/jobs')
+async def create_avatar_job(request: Request, background_tasks: BackgroundTasks):
+    """Private endpoint used by the Feishu button workflow."""
+    expected = os.getenv('AVATAR_VIDEO_SERVICE_SECRET', '').strip()
+    supplied = request.headers.get('Authorization', '')
+    if not expected or supplied != f'Bearer {expected}':
+        raise HTTPException(status_code=403, detail='unauthorized')
+    payload = await request.json()
+    required = {'record_id', 'script', 'avatar_key', 'callback_url'}
+    if any(not payload.get(key) for key in required):
+        raise HTTPException(status_code=400, detail='incomplete job')
+    job_id = accepted_job_id()
+    background_tasks.add_task(wait_and_callback, payload)
+    return {'job_id': job_id}
