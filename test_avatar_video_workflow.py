@@ -4,10 +4,16 @@ from unittest.mock import patch
 
 from avatar_video_workflow import (avatar_card, avatar_choices,
                                    command_without_mention, parse_card_action,
-                                   parse_script_number, generation_script)
+                                   parse_script_number, generation_script,
+                                   estimate_video_cost)
 
 
 class AvatarVideoWorkflowTests(unittest.TestCase):
+    def test_cost_estimate_uses_script_length(self):
+        estimate = estimate_video_cost('测' * 400)
+        self.assertEqual(estimate['seconds'], 100)
+        self.assertAlmostEqual(estimate['dollars'], 6.67)
+
     def test_parse_script_number_with_group_mention(self):
         text = '<at user_id="ou_123">口播稿助手</at> 跑脚本 27'
         self.assertEqual(command_without_mention(text), '跑脚本27')

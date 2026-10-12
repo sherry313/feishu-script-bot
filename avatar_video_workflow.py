@@ -81,6 +81,13 @@ def generation_script(fields):
     return text_value((fields or {}).get('改写一')).strip()
 
 
+def estimate_video_cost(script):
+    """Estimate narration duration and API cost before a user submits."""
+    chars = len(re.sub(r'\s+', '', script or ''))
+    seconds = max(1, round(chars / 4))
+    return {'seconds': seconds, 'dollars': seconds * 0.0667}
+
+
 def script_record(client, number):
     rows = records_in_view(client)
     if number > len(rows):
@@ -100,6 +107,9 @@ def script_record(client, number):
 
 
 def avatar_card(record):
+    estimate = estimate_video_cost(record['script'])
+    minutes, seconds = divmod(estimate['seconds'], 60)
+    duration = f'{minutes}分{seconds:02d}秒' if minutes else f'{seconds}秒'
     buttons = []
     for choice in avatar_choices():
         buttons.append({
@@ -120,7 +130,12 @@ def avatar_card(record):
             'title': {'tag': 'plain_text', 'content': f'脚本 {record["number"]}｜选择数字人'},
         },
         'elements': [
-            {'tag': 'markdown', 'content': f'**{record["title"]}**\n\n选定后只提交一次，不会自动重跑。'},
+            {'tag': 'markdown', 'content': (
+                f'**{record["title"]}**\n\n'
+                f'预计时长：**约 {duration}**\n'
+                f'预计 API 成本：**约 ${estimate["dollars"]:.2f}**\n\n'
+                '实际费用按最终成片时长计算。选定后只提交一次，不会自动重跑。'
+            )},
             {'tag': 'action', 'actions': buttons},
         ],
     }
