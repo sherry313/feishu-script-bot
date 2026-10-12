@@ -18,7 +18,9 @@ from fastapi import BackgroundTasks, FastAPI, HTTPException, Request
 from fastapi.responses import JSONResponse, StreamingResponse
 
 from feishu_sync import API, Feishu, TABLE_URL, text_value
-from avatar_video_workflow import (apply_job_callback, avatar_card, command_without_mention,
+from avatar_video_workflow import (apply_job_callback, avatar_card, confirmation_card,
+                                   command_without_mention,
+                                   avatar_source,
                                    parse_card_action, parse_plain_script_number,
                                    parse_script_number,
                                    script_record, submit_video_job)
@@ -83,11 +85,7 @@ def send_card(chat_id, card):
 
 def send_avatar_picker(chat_id, number):
     try:
-        record = script_record(Feishu(), number)
-        if record['status'] in {'生成中', '已生成'}:
-            send_text(chat_id, f'脚本 {number} 当前状态是“{record["status"]}”，不会重复提交。')
-            return
-        send_card(chat_id, avatar_card(record))
+        send_card(chat_id, avatar_card(number))
     except Exception as exc:
         logger.exception('Failed to prepare avatar picker')
         send_text(chat_id, str(exc))
@@ -95,13 +93,28 @@ def send_avatar_picker(chat_id, number):
 
 def run_avatar_selection(chat_id, action):
     try:
-        result = submit_video_job(Feishu(), action)
+        source = avatar_source(action['avatar_key'])
+        result = submit_video_job(Feishu(table_id=source['table_id']), action)
         if result['duplicate']:
             send_text(chat_id, f'这条任务已经是“{result["status"]}”，没有重复提交。')
         else:
             send_text(chat_id, f'已选择{result["avatar_label"]}，视频开始生成。完成后会回填到原表格。')
     except Exception as exc:
         logger.exception('Avatar video submission failed')
+        send_text(chat_id, str(exc))
+
+
+def send_avatar_confirmation(chat_id, action):
+    try:
+        source = avatar_source(action['avatar_key'])
+        record = script_record(Feishu(table_id=source['table_id']),
+                               action['script_number'], source['view_id'])
+        if record['status'] in {'生成中', '已生成'}:
+            send_text(chat_id, f'脚本 {action["script_number"]} 当前状态是“{record["status"]}”，不会重复提交。')
+            return
+        send_card(chat_id, confirmation_card(record, action['avatar_key']))
+    except Exception as exc:
+        logger.exception('Failed to prepare generation confirmation')
         send_text(chat_id, str(exc))
 
 
@@ -186,6 +199,9 @@ async def feishu_events(request: Request, background_tasks: BackgroundTasks):
         if action:
             chat_id = action.get('chat_id', '')
             if chat_id:
+                if action['action'] == 'select_avatar_script':
+                    background_tasks.add_task(send_avatar_confirmation, chat_id, action)
+                    return {'toast': {'type': 'success', 'content': '已选择，请确认成本'}}
                 background_tasks.add_task(run_avatar_selection, chat_id, action)
             return {'toast': {'type': 'success', 'content': '已收到，只提交一次'}}
         return {'ok': True}
@@ -247,7 +263,10 @@ async def daily_job(request: Request, background_tasks: BackgroundTasks):
 async def avatar_job_callback(request: Request, background_tasks: BackgroundTasks):
     body = await request.json()
     try:
-        fields = apply_job_callback(Feishu(), body)
+        table_id = str(body.get('table_id', '')).strip()
+        if not table_id:
+            raise RuntimeError('回调缺少脚本表编号。')
+        fields = apply_job_callback(Feishu(table_id=table_id), body)
     except PermissionError:
         raise HTTPException(status_code=403, detail='unauthorized')
     chat_id = str(body.get('chat_id', '')).strip()

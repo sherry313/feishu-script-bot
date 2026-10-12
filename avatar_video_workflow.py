@@ -14,7 +14,6 @@ import requests
 from feishu_sync import text_value
 
 
-VIEW_ID = os.getenv('FEISHU_VIEW_ID', 'vewhIlXf4y').strip()
 _record_locks = {}
 _record_locks_guard = threading.Lock()
 
@@ -51,15 +50,16 @@ def avatar_choices():
     raw = os.getenv('AVATAR_CHOICES_JSON', '').strip()
     if not raw:
         return [
-            {'key': 'avatar_a', 'label': '数字人 A'},
-            {'key': 'avatar_b', 'label': '数字人 B'},
+            {'key': 'avatar_b', 'label': 'LEO'},
+            {'key': 'avatar_a', 'label': '陈总'},
+            {'key': 'avatar_libby', 'label': 'Libby'},
         ]
     try:
         choices = json.loads(raw)
     except json.JSONDecodeError as exc:
         raise RuntimeError('AVATAR_CHOICES_JSON 不是有效 JSON。') from exc
-    if not isinstance(choices, list) or len(choices) != 2:
-        raise RuntimeError('必须配置两个数字人选项。')
+    if not isinstance(choices, list) or len(choices) != 3:
+        raise RuntimeError('必须配置三个数字人选项。')
     cleaned = []
     for item in choices:
         key = str(item.get('key', '')).strip() if isinstance(item, dict) else ''
@@ -67,13 +67,33 @@ def avatar_choices():
         if not re.fullmatch(r'[a-zA-Z0-9_-]{1,40}', key) or not label:
             raise RuntimeError('数字人选项的 key 或 label 配置不正确。')
         cleaned.append({'key': key, 'label': label[:30]})
-    if cleaned[0]['key'] == cleaned[1]['key']:
-        raise RuntimeError('两个数字人的 key 不能相同。')
+    if len({item['key'] for item in cleaned}) != 3:
+        raise RuntimeError('三个数字人的 key 不能相同。')
     return cleaned
 
 
-def records_in_view(client):
-    params = {'page_size': 100, 'view_id': VIEW_ID}
+def avatar_source(avatar_key):
+    """Map a public avatar choice to its private script table and optional view."""
+    settings = {
+        'avatar_b': (
+            os.getenv('LEO_TABLE_ID') or os.getenv('FEISHU_TABLE_ID', ''),
+            os.getenv('LEO_VIEW_ID') or os.getenv('FEISHU_VIEW_ID', 'vewhIlXf4y'),
+        ),
+        'avatar_a': (os.getenv('CHEN_TABLE_ID', ''), os.getenv('CHEN_VIEW_ID', '')),
+        'avatar_libby': (os.getenv('LIBBY_TABLE_ID', ''), os.getenv('LIBBY_VIEW_ID', '')),
+    }
+    table_id, view_id = settings.get(avatar_key, ('', ''))
+    if not table_id:
+        label = next((item['label'] for item in avatar_choices()
+                      if item['key'] == avatar_key), avatar_key)
+        raise RuntimeError(f'{label}脚本表尚未完成后台绑定。')
+    return {'table_id': table_id.strip(), 'view_id': view_id.strip()}
+
+
+def records_in_view(client, view_id=''):
+    params = {'page_size': 100}
+    if view_id:
+        params['view_id'] = view_id
     records = []
     while True:
         data = client.request('GET', client.base + '/records', params=params)['data']
@@ -98,8 +118,8 @@ def estimate_video_cost(script):
     return {'seconds': seconds, 'dollars': seconds * 0.0167}
 
 
-def script_record(client, number):
-    rows = records_in_view(client)
+def script_record(client, number, view_id=''):
+    rows = records_in_view(client, view_id)
     if number > len(rows):
         raise RuntimeError(f'当前视图只有 {len(rows)} 条，找不到脚本 {number}。')
     record = rows[number - 1]
@@ -116,10 +136,7 @@ def script_record(client, number):
     }
 
 
-def avatar_card(record):
-    estimate = estimate_video_cost(record['script'])
-    minutes, seconds = divmod(estimate['seconds'], 60)
-    duration = f'{minutes}分{seconds:02d}秒' if minutes else f'{seconds}秒'
+def avatar_card(number):
     buttons = []
     for choice in avatar_choices():
         buttons.append({
@@ -127,9 +144,8 @@ def avatar_card(record):
             'text': {'tag': 'plain_text', 'content': choice['label']},
             'type': 'primary',
             'value': {
-                'action': 'generate_avatar_video',
-                'record_id': record['record_id'],
-                'script_number': record['number'],
+                'action': 'select_avatar_script',
+                'script_number': number,
                 'avatar_key': choice['key'],
             },
         })
@@ -137,16 +153,50 @@ def avatar_card(record):
         'config': {'wide_screen_mode': True},
         'header': {
             'template': 'blue',
-            'title': {'tag': 'plain_text', 'content': f'脚本 {record["number"]}｜选择数字人'},
+            'title': {'tag': 'plain_text', 'content': f'脚本 {number}｜选择数字人'},
+        },
+        'elements': [
+            {'tag': 'markdown', 'content': (
+                '请选择数字人。机器人会从对应脚本表读取同编号的“改写一”，'
+                '确认文案和预计成本后再生成。'
+            )},
+            {'tag': 'action', 'actions': buttons},
+        ],
+    }
+
+
+def confirmation_card(record, avatar_key):
+    choices = {item['key']: item['label'] for item in avatar_choices()}
+    if avatar_key not in choices:
+        raise RuntimeError('数字人选择无效。')
+    estimate = estimate_video_cost(record['script'])
+    minutes, seconds = divmod(estimate['seconds'], 60)
+    duration = f'{minutes}分{seconds:02d}秒' if minutes else f'{seconds}秒'
+    return {
+        'config': {'wide_screen_mode': True},
+        'header': {
+            'template': 'orange',
+            'title': {'tag': 'plain_text', 'content': (
+                f'{choices[avatar_key]}｜脚本 {record["number"]}｜确认生成'
+            )},
         },
         'elements': [
             {'tag': 'markdown', 'content': (
                 f'**{record["title"]}**\n\n'
                 f'预计时长：**约 {duration}**\n'
                 f'预计 API 成本：**约 ${estimate["dollars"]:.2f}**\n\n'
-                '实际费用按最终成片时长计算。选定后只提交一次，不会自动重跑。'
+                '实际费用按最终成片时长计算。确认后只提交一次，不会自动重跑。'
             )},
-            {'tag': 'action', 'actions': buttons},
+            {'tag': 'action', 'actions': [{
+                'tag': 'button',
+                'text': {'tag': 'plain_text', 'content': '确认生成'},
+                'type': 'primary',
+                'value': {
+                    'action': 'generate_avatar_video',
+                    'script_number': record['number'],
+                    'avatar_key': avatar_key,
+                },
+            }]},
         ],
     }
 
@@ -155,11 +205,12 @@ def parse_card_action(payload):
     event = payload.get('event') or payload
     action = event.get('action') or {}
     value = action.get('value') or {}
-    if value.get('action') != 'generate_avatar_video':
+    action_type = value.get('action')
+    if action_type not in {'select_avatar_script', 'generate_avatar_video'}:
         return None
     context = event.get('context') or {}
     return {
-        'record_id': str(value.get('record_id', '')).strip(),
+        'action': action_type,
         'script_number': int(value.get('script_number') or 0),
         'avatar_key': str(value.get('avatar_key', '')).strip(),
         'chat_id': (context.get('open_chat_id') or event.get('open_chat_id') or
@@ -179,7 +230,11 @@ def _fresh_record(client, record_id):
 
 def submit_video_job(client, action):
     """Atomically-enough guard a single instance, then submit exactly once."""
-    record_id = action['record_id']
+    source = avatar_source(action['avatar_key'])
+    if client.table_id != source['table_id']:
+        raise RuntimeError('脚本表与所选数字人不匹配，任务没有提交。')
+    record = script_record(client, action['script_number'], source['view_id'])
+    record_id = record['record_id']
     choices = {item['key']: item['label'] for item in avatar_choices()}
     if not record_id or action['avatar_key'] not in choices:
         raise RuntimeError('数字人选择无效，请重新发送“跑脚本+编号”。')
@@ -210,6 +265,7 @@ def submit_video_job(client, action):
                 headers={'Authorization': f'Bearer {service_secret}'},
                 json={
                     'record_id': record_id,
+                    'table_id': client.table_id,
                     'script_number': action['script_number'],
                     'title': text_value(fields.get('标题')).strip(),
                     'script': script,

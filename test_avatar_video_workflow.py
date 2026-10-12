@@ -2,7 +2,7 @@ import os
 import unittest
 from unittest.mock import patch
 
-from avatar_video_workflow import (avatar_card, avatar_choices,
+from avatar_video_workflow import (avatar_card, avatar_choices, confirmation_card,
                                    command_without_mention, parse_card_action,
                                    parse_plain_script_number, parse_script_number, generation_script,
                                    estimate_video_cost)
@@ -35,31 +35,36 @@ class AvatarVideoWorkflowTests(unittest.TestCase):
         self.assertIsNone(parse_plain_script_number('脚本27'))
         self.assertIsNone(parse_plain_script_number('0'))
 
-    def test_two_safe_default_avatar_choices(self):
+    def test_three_safe_default_avatar_choices(self):
         with patch.dict(os.environ, {}, clear=False):
             os.environ.pop('AVATAR_CHOICES_JSON', None)
             choices = avatar_choices()
-        self.assertEqual([item['key'] for item in choices], ['avatar_a', 'avatar_b'])
+        self.assertEqual([item['key'] for item in choices],
+                         ['avatar_b', 'avatar_a', 'avatar_libby'])
 
     def test_card_does_not_contain_script_or_provider_id(self):
-        record = {'record_id': 'rec1', 'number': 27, 'title': '测试标题',
-                  'script': '这一段正文不应该被放进卡片'}
-        card = avatar_card(record)
+        card = avatar_card(27)
         rendered = str(card)
-        self.assertNotIn(record['script'], rendered)
         self.assertIn('脚本 27', rendered)
 
     def test_parse_card_action(self):
         payload = {'event': {
             'action': {'value': {'action': 'generate_avatar_video',
-                                 'record_id': 'rec1', 'script_number': 27,
+                                 'script_number': 27,
                                  'avatar_key': 'avatar_b'}},
             'context': {'open_chat_id': 'oc_1'},
         }}
         self.assertEqual(parse_card_action(payload), {
-            'record_id': 'rec1', 'script_number': 27,
+            'action': 'generate_avatar_video', 'script_number': 27,
             'avatar_key': 'avatar_b', 'chat_id': 'oc_1',
         })
+
+    def test_confirmation_card_shows_cost_after_avatar_selection(self):
+        record = {'number': 27, 'title': '测试标题', 'script': '测' * 400}
+        rendered = str(confirmation_card(record, 'avatar_b'))
+        self.assertIn('LEO', rendered)
+        self.assertIn('$1.67', rendered)
+        self.assertIn('确认生成', rendered)
 
     def test_video_always_uses_first_rewrite(self):
         fields = {'口播稿': '原始口播稿', '改写一': '最终用于生成的视频文案',

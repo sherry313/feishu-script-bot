@@ -48,7 +48,7 @@ def candidates(rows):
 
 
 class Feishu:
-    def __init__(self):
+    def __init__(self, table_id=None):
         secret = os.getenv('FEISHU_APP_SECRET', '').strip()
         if not secret:
             raise RuntimeError('缺少 FEISHU_APP_SECRET，请保存在项目 .env 文件中。')
@@ -67,7 +67,7 @@ class Feishu:
             if node.get('obj_type') != 'bitable':
                 raise RuntimeError('目标知识库节点不是多维表格，已停止。')
             self.app_token = node['obj_token']
-        self.table_id = os.getenv('FEISHU_TABLE_ID', TABLE_ID).strip()
+        self.table_id = (table_id or os.getenv('FEISHU_TABLE_ID', TABLE_ID)).strip()
         self.base = f'/bitable/v1/apps/{self.app_token}/tables/{self.table_id}'
 
     def request(self, method, path, **kwargs):

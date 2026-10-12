@@ -32,6 +32,10 @@ def avatar_bindings():
             'avatar_id': os.getenv('AVATAR_B_LOOK_ID', '').strip(),
             'voice_id': os.getenv('AVATAR_B_VOICE_ID', '').strip(),
         },
+        'avatar_libby': {
+            'avatar_id': os.getenv('AVATAR_LIBBY_LOOK_ID', '').strip(),
+            'voice_id': os.getenv('AVATAR_LIBBY_VOICE_ID', '').strip(),
+        },
     }
 
 
@@ -95,6 +99,7 @@ def wait_and_callback(payload):
     callback = {
         'secret': os.getenv('AVATAR_VIDEO_SERVICE_SECRET', '').strip(),
         'record_id': payload.get('record_id', ''),
+        'table_id': payload.get('table_id', ''),
         'chat_id': payload.get('chat_id', ''),
         'script_number': payload.get('script_number', ''),
         'status': status,
