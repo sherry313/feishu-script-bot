@@ -12,7 +12,7 @@ class AvatarVideoWorkflowTests(unittest.TestCase):
     def test_cost_estimate_uses_script_length(self):
         estimate = estimate_video_cost('测' * 400)
         self.assertEqual(estimate['seconds'], 100)
-        self.assertAlmostEqual(estimate['dollars'], 6.67)
+        self.assertAlmostEqual(estimate['dollars'], 1.67)
 
     def test_parse_script_number_with_group_mention(self):
         text = '<at user_id="ou_123">口播稿助手</at> 跑脚本 27'

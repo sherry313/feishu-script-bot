@@ -85,7 +85,7 @@ def estimate_video_cost(script):
     """Estimate narration duration and API cost before a user submits."""
     chars = len(re.sub(r'\s+', '', script or ''))
     seconds = max(1, round(chars / 4))
-    return {'seconds': seconds, 'dollars': seconds * 0.0667}
+    return {'seconds': seconds, 'dollars': seconds * 0.0167}
 
 
 def script_record(client, number):

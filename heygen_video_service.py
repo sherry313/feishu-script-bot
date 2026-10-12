@@ -47,6 +47,7 @@ def create_video_job(payload):
         'title': (payload.get('title') or f"脚本 {payload.get('script_number', '')}")[:100],
         'aspect_ratio': '9:16',
         'resolution': '1080p',
+        'engine': {'type': 'avatar_iii'},
     }
     response = requests.post(API_BASE + '/v3/videos', headers=_headers(True),
                              json=request_body, timeout=60)
