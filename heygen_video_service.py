@@ -2,11 +2,13 @@
 import os
 import time
 import uuid
+import logging
 
 import requests
 
 
 API_BASE = 'https://api.heygen.com'
+logger = logging.getLogger('uvicorn.error')
 
 
 def _headers(json_body=False):
@@ -80,7 +82,8 @@ def wait_and_callback(payload):
             if remote_status in {'failed', 'error'}:
                 break
             time.sleep(10)
-    except Exception:
+    except Exception as exc:
+        logger.error('[avatar-video] generation failed: %s', exc)
         status = 'failed'
 
     callback = {
