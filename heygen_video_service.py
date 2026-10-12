@@ -96,10 +96,12 @@ def wait_and_callback(payload):
         'secret': os.getenv('AVATAR_VIDEO_SERVICE_SECRET', '').strip(),
         'record_id': payload.get('record_id', ''),
         'chat_id': payload.get('chat_id', ''),
+        'script_number': payload.get('script_number', ''),
         'status': status,
     }
     if video_url:
         callback['video_url'] = video_url
+        callback['video_id'] = video_id
     requests.post(payload['callback_url'], json=callback, timeout=30).raise_for_status()
 
 

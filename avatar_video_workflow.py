@@ -7,6 +7,7 @@ import json
 import os
 import re
 import threading
+from urllib.parse import quote
 
 import requests
 
@@ -233,7 +234,15 @@ def apply_job_callback(client, body):
         url = str(body.get('video_url', '')).strip()
         if not url.startswith('https://'):
             raise RuntimeError('完成回调缺少有效视频地址。')
-        fields['HeyGen 成片链接'] = {'link': url, 'text': '查看成片'}
+        video_id = str(body.get('video_id', '')).strip()
+        number = int(body.get('script_number') or 0)
+        if re.fullmatch(r'[a-zA-Z0-9_-]{8,80}', video_id) and number > 0:
+            base = os.getenv('PUBLIC_BASE_URL', '').rstrip('/')
+            url = f'{base}/avatar/videos/{video_id}/download?name={quote(f"脚本{number}")}'
+        fields['HeyGen 成片链接'] = {
+            'link': url,
+            'text': f'脚本{number}' if number > 0 else '查看成片',
+        }
     client.request('PUT', client.base + '/records/' + record_id,
                    json={'fields': fields})
     return fields

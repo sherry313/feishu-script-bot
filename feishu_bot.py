@@ -10,11 +10,12 @@ import logging
 import subprocess
 import sys
 import threading
+from urllib.parse import quote
 from pathlib import Path
 
 import requests
 from fastapi import BackgroundTasks, FastAPI, HTTPException, Request
-from fastapi.responses import JSONResponse
+from fastapi.responses import JSONResponse, StreamingResponse
 
 from feishu_sync import API, Feishu, TABLE_URL, text_value
 from avatar_video_workflow import (apply_job_callback, avatar_card, command_without_mention,
@@ -265,3 +266,29 @@ async def create_avatar_job(request: Request, background_tasks: BackgroundTasks)
     job_id = accepted_job_id()
     background_tasks.add_task(wait_and_callback, payload)
     return {'job_id': job_id}
+
+
+@app.get('/avatar/videos/{video_id}/download')
+def download_avatar_video(video_id: str, name: str = '视频'):
+    """Refresh the provider URL and force a human-readable MP4 filename."""
+    if not re.fullmatch(r'[a-zA-Z0-9_-]{8,80}', video_id):
+        raise HTTPException(status_code=400, detail='invalid video id')
+    safe_name = re.sub(r'[^0-9A-Za-z\u4e00-\u9fff_-]+', '', name)[:60] or '视频'
+    key = os.getenv('HEYGEN_API_KEY', '').strip()
+    response = requests.get(
+        f'https://api.heygen.com/v3/videos/{video_id}',
+        headers={'X-Api-Key': key, 'Accept': 'application/json'}, timeout=30,
+    )
+    data = (response.json().get('data') or {}) if response.ok else {}
+    source_url = str(data.get('video_url', '')).strip()
+    if data.get('status') != 'completed' or not source_url.startswith('https://'):
+        raise HTTPException(status_code=404, detail='video not ready')
+    source = requests.get(source_url, stream=True, timeout=300)
+    source.raise_for_status()
+    headers = {
+        'Content-Disposition': f"attachment; filename*=UTF-8''{quote(safe_name + '.mp4')}",
+    }
+    if source.headers.get('content-length'):
+        headers['Content-Length'] = source.headers['content-length']
+    return StreamingResponse(source.iter_content(1024 * 256), media_type='video/mp4',
+                             headers=headers)
