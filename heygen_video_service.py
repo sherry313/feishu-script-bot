@@ -52,7 +52,12 @@ def create_video_job(payload):
                              json=request_body, timeout=60)
     body = response.json()
     if not response.ok or body.get('error'):
-        raise RuntimeError('视频平台没有接受任务，请检查 API 余额。')
+        error = body.get('error') or {}
+        code = error.get('code') if isinstance(error, dict) else ''
+        message = error.get('message') if isinstance(error, dict) else str(error)
+        raise RuntimeError(
+            f'视频平台拒绝任务（HTTP {response.status_code}, code={code}, message={message}）'
+        )
     data = body.get('data') or body
     video_id = data.get('video_id') or data.get('id')
     if not video_id:
