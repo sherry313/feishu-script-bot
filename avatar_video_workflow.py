@@ -187,16 +187,28 @@ def confirmation_card(record, avatar_key):
                 f'预计 API 成本：**约 ${estimate["dollars"]:.2f}**\n\n'
                 '实际费用按最终成片时长计算。确认后只提交一次，不会自动重跑。'
             )},
-            {'tag': 'action', 'actions': [{
-                'tag': 'button',
-                'text': {'tag': 'plain_text', 'content': '确认生成'},
-                'type': 'primary',
-                'value': {
-                    'action': 'generate_avatar_video',
-                    'script_number': record['number'],
-                    'avatar_key': avatar_key,
+            {'tag': 'action', 'actions': [
+                {
+                    'tag': 'button',
+                    'text': {'tag': 'plain_text', 'content': '确认生成'},
+                    'type': 'primary',
+                    'value': {
+                        'action': 'generate_avatar_video',
+                        'script_number': record['number'],
+                        'avatar_key': avatar_key,
+                    },
                 },
-            }]},
+                {
+                    'tag': 'button',
+                    'text': {'tag': 'plain_text', 'content': '取消生成'},
+                    'type': 'default',
+                    'value': {
+                        'action': 'cancel_avatar_video',
+                        'script_number': record['number'],
+                        'avatar_key': avatar_key,
+                    },
+                },
+            ]},
         ],
     }
 
@@ -206,7 +218,9 @@ def parse_card_action(payload):
     action = event.get('action') or {}
     value = action.get('value') or {}
     action_type = value.get('action')
-    if action_type not in {'select_avatar_script', 'generate_avatar_video'}:
+    if action_type not in {
+        'select_avatar_script', 'generate_avatar_video', 'cancel_avatar_video'
+    }:
         return None
     context = event.get('context') or {}
     return {

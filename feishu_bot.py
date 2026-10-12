@@ -203,6 +203,12 @@ async def feishu_events(request: Request, background_tasks: BackgroundTasks):
                 if action['action'] == 'select_avatar_script':
                     background_tasks.add_task(send_avatar_confirmation, chat_id, action)
                     return {'toast': {'type': 'success', 'content': '已选择，请确认成本'}}
+                if action['action'] == 'cancel_avatar_video':
+                    background_tasks.add_task(
+                        send_text, chat_id,
+                        f'已取消脚本 {action["script_number"]}，任务没有提交，不会扣费。',
+                    )
+                    return {'toast': {'type': 'info', 'content': '已取消生成'}}
                 background_tasks.add_task(run_avatar_selection, chat_id, action)
             return {'toast': {'type': 'success', 'content': '已收到，只提交一次'}}
         return {'ok': True}

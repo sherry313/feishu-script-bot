@@ -70,6 +70,19 @@ class AvatarVideoWorkflowTests(unittest.TestCase):
         self.assertIn('LEO', rendered)
         self.assertIn('$1.67', rendered)
         self.assertIn('确认生成', rendered)
+        self.assertIn('取消生成', rendered)
+
+    def test_parse_cancel_card_action(self):
+        payload = {'event': {
+            'action': {'value': {'action': 'cancel_avatar_video',
+                                 'script_number': 62,
+                                 'avatar_key': 'avatar_b'}},
+            'context': {'open_chat_id': 'oc_1'},
+        }}
+        self.assertEqual(parse_card_action(payload), {
+            'action': 'cancel_avatar_video', 'script_number': 62,
+            'avatar_key': 'avatar_b', 'chat_id': 'oc_1',
+        })
 
     def test_video_always_uses_first_rewrite(self):
         fields = {'口播稿': '原始口播稿', '改写一': '最终用于生成的视频文案',
