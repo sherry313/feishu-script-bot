@@ -170,7 +170,8 @@ def reply_for(text):
     # so matching commands within the remaining text is safe and resilient.
     if normalized in {'帮助', 'help', '/help', '开始'} or '帮助' in normalized or 'help' in normalized:
         return ('我是口播稿助手。\n发送“状态”查看进度；发送“跑一条”处理下一条未完成文案；'
-                '发送“跑脚本27”选择数字人并生成第 27 条视频。')
+                '群里直接发送数字“27”（也支持“跑脚本27”），然后选择 LEO、Libby 或陈总脚本库，'
+                '确认成本后生成对应表格的第 27 条视频。')
     if normalized in {'状态', 'status', '/status'} or '状态' in normalized or 'status' in normalized:
         return status_text()
     if normalized in {'表格', 'table'} or '表格' in normalized or 'table' in normalized:

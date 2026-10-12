@@ -50,9 +50,9 @@ def avatar_choices():
     raw = os.getenv('AVATAR_CHOICES_JSON', '').strip()
     if not raw:
         return [
-            {'key': 'avatar_b', 'label': 'LEO'},
-            {'key': 'avatar_a', 'label': '陈总'},
-            {'key': 'avatar_libby', 'label': 'Libby'},
+            {'key': 'avatar_b', 'label': 'LEO脚本'},
+            {'key': 'avatar_libby', 'label': 'Libby脚本'},
+            {'key': 'avatar_a', 'label': '陈总脚本'},
         ]
     try:
         choices = json.loads(raw)
@@ -153,12 +153,12 @@ def avatar_card(number):
         'config': {'wide_screen_mode': True},
         'header': {
             'template': 'blue',
-            'title': {'tag': 'plain_text', 'content': f'脚本 {number}｜选择数字人'},
+            'title': {'tag': 'plain_text', 'content': f'编号 {number}｜选择脚本库'},
         },
         'elements': [
             {'tag': 'markdown', 'content': (
-                '请选择数字人。机器人会从对应脚本表读取同编号的“改写一”，'
-                '确认文案和预计成本后再生成。'
+                f'请选择编号 **{number}** 属于哪一个脚本库。机器人只会从所选表格读取'
+                '同编号的“改写一”，确认文案和预计成本后再生成，不会混用其他表格。'
             )},
             {'tag': 'action', 'actions': buttons},
         ],

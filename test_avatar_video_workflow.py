@@ -40,12 +40,17 @@ class AvatarVideoWorkflowTests(unittest.TestCase):
             os.environ.pop('AVATAR_CHOICES_JSON', None)
             choices = avatar_choices()
         self.assertEqual([item['key'] for item in choices],
-                         ['avatar_b', 'avatar_a', 'avatar_libby'])
+                         ['avatar_b', 'avatar_libby', 'avatar_a'])
+        self.assertEqual([item['label'] for item in choices],
+                         ['LEO脚本', 'Libby脚本', '陈总脚本'])
 
     def test_card_does_not_contain_script_or_provider_id(self):
         card = avatar_card(27)
         rendered = str(card)
-        self.assertIn('脚本 27', rendered)
+        self.assertIn('编号 27', rendered)
+        self.assertIn('LEO脚本', rendered)
+        self.assertIn('Libby脚本', rendered)
+        self.assertIn('陈总脚本', rendered)
 
     def test_parse_card_action(self):
         payload = {'event': {
