@@ -78,16 +78,25 @@ def avatar_source(avatar_key):
         'avatar_b': (
             os.getenv('LEO_TABLE_ID') or os.getenv('FEISHU_TABLE_ID', ''),
             os.getenv('LEO_VIEW_ID') or os.getenv('FEISHU_VIEW_ID', 'vewhIlXf4y'),
+            'LEO',
         ),
-        'avatar_a': (os.getenv('CHEN_TABLE_ID', ''), os.getenv('CHEN_VIEW_ID', '')),
-        'avatar_libby': (os.getenv('LIBBY_TABLE_ID', ''), os.getenv('LIBBY_VIEW_ID', '')),
+        'avatar_a': (
+            os.getenv('CHEN_TABLE_ID', ''), os.getenv('CHEN_VIEW_ID', ''), 'Chen'
+        ),
+        'avatar_libby': (
+            os.getenv('LIBBY_TABLE_ID', ''), os.getenv('LIBBY_VIEW_ID', ''), 'Libby'
+        ),
     }
-    table_id, view_id = settings.get(avatar_key, ('', ''))
+    table_id, view_id, library = settings.get(avatar_key, ('', '', ''))
     if not table_id:
         label = next((item['label'] for item in avatar_choices()
                       if item['key'] == avatar_key), avatar_key)
         raise RuntimeError(f'{label}脚本表尚未完成后台绑定。')
-    return {'table_id': table_id.strip(), 'view_id': view_id.strip()}
+    return {
+        'table_id': table_id.strip(),
+        'view_id': view_id.strip(),
+        'library': library,
+    }
 
 
 def records_in_view(client, view_id=''):
@@ -118,10 +127,14 @@ def estimate_video_cost(script):
     return {'seconds': seconds, 'dollars': seconds * 0.0167}
 
 
-def script_record(client, number, view_id=''):
+def script_record(client, number, view_id='', library=''):
     rows = records_in_view(client, view_id)
+    if library:
+        rows = [row for row in rows
+                if text_value(row.get('fields', {}).get('脚本库')).strip() == library]
     if number > len(rows):
-        raise RuntimeError(f'当前视图只有 {len(rows)} 条，找不到脚本 {number}。')
+        label = f'{library}脚本库' if library else '当前视图'
+        raise RuntimeError(f'{label}只有 {len(rows)} 条，找不到脚本 {number}。')
     record = rows[number - 1]
     fields = record.get('fields', {})
     script = generation_script(fields)
@@ -247,7 +260,8 @@ def submit_video_job(client, action):
     source = avatar_source(action['avatar_key'])
     if client.table_id != source['table_id']:
         raise RuntimeError('脚本表与所选数字人不匹配，任务没有提交。')
-    record = script_record(client, action['script_number'], source['view_id'])
+    record = script_record(client, action['script_number'], source['view_id'],
+                           source['library'])
     record_id = record['record_id']
     choices = {item['key']: item['label'] for item in avatar_choices()}
     if not record_id or action['avatar_key'] not in choices:

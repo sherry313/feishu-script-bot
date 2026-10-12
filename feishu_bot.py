@@ -108,7 +108,8 @@ def send_avatar_confirmation(chat_id, action):
     try:
         source = avatar_source(action['avatar_key'])
         record = script_record(Feishu(table_id=source['table_id']),
-                               action['script_number'], source['view_id'])
+                               action['script_number'], source['view_id'],
+                               source['library'])
         if record['status'] in {'生成中', '已生成'}:
             send_text(chat_id, f'脚本 {action["script_number"]} 当前状态是“{record["status"]}”，不会重复提交。')
             return

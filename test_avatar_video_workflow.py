@@ -5,7 +5,7 @@ from unittest.mock import patch
 from avatar_video_workflow import (avatar_card, avatar_choices, confirmation_card,
                                    command_without_mention, parse_card_action,
                                    parse_plain_script_number, parse_script_number, generation_script,
-                                   estimate_video_cost)
+                                   estimate_video_cost, script_record)
 
 
 class AvatarVideoWorkflowTests(unittest.TestCase):
@@ -91,6 +91,18 @@ class AvatarVideoWorkflowTests(unittest.TestCase):
 
     def test_missing_first_rewrite_does_not_fall_back(self):
         self.assertEqual(generation_script({'口播稿': '原始口播稿'}), '')
+
+    @patch('avatar_video_workflow.records_in_view')
+    def test_script_number_is_scoped_to_selected_library(self, records):
+        records.return_value = [
+            {'record_id': 'leo-1', 'fields': {
+                '脚本库': 'LEO', '标题': 'LEO内容', '改写一': 'LEO文案'}},
+            {'record_id': 'libby-1', 'fields': {
+                '脚本库': 'Libby', '标题': 'Libby内容', '改写一': 'Libby文案'}},
+        ]
+        record = script_record(object(), 1, 'view-libby', 'Libby')
+        self.assertEqual(record['record_id'], 'libby-1')
+        self.assertEqual(record['script'], 'Libby文案')
 
 
 if __name__ == '__main__':
