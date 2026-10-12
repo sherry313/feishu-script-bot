@@ -21,6 +21,10 @@ TABLE_ID = 'tbl6xbauVAY1KE7W'
 TABLE_URL = f'https://bkqc58qk51.feishu.cn/wiki/{WIKI_TOKEN}?table={TABLE_ID}'
 
 
+def table_url(table_id):
+    return f'https://bkqc58qk51.feishu.cn/wiki/{WIKI_TOKEN}?table={table_id}'
+
+
 def text_value(value):
     if isinstance(value, str):
         return value

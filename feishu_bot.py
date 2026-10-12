@@ -17,7 +17,7 @@ import requests
 from fastapi import BackgroundTasks, FastAPI, HTTPException, Request
 from fastapi.responses import JSONResponse, StreamingResponse
 
-from feishu_sync import API, Feishu, TABLE_URL, text_value
+from feishu_sync import API, Feishu, TABLE_URL, table_url, text_value
 from avatar_video_workflow import (apply_job_callback, avatar_card, confirmation_card,
                                    command_without_mention,
                                    avatar_source,
@@ -272,7 +272,7 @@ async def avatar_job_callback(request: Request, background_tasks: BackgroundTask
     chat_id = str(body.get('chat_id', '')).strip()
     if chat_id:
         message = '视频已生成并回填到原表格。' if fields['生成状态'] == '已生成' else '视频生成失败，没有自动重试。'
-        background_tasks.add_task(send_text, chat_id, message + '\n' + TABLE_URL)
+        background_tasks.add_task(send_text, chat_id, message + '\n' + table_url(table_id))
     return {'ok': True}
 
 
