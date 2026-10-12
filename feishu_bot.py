@@ -19,7 +19,8 @@ from fastapi.responses import JSONResponse, StreamingResponse
 
 from feishu_sync import API, Feishu, TABLE_URL, text_value
 from avatar_video_workflow import (apply_job_callback, avatar_card, command_without_mention,
-                                   parse_card_action, parse_script_number,
+                                   parse_card_action, parse_plain_script_number,
+                                   parse_script_number,
                                    script_record, submit_video_job)
 from heygen_video_service import accepted_job_id, wait_and_callback
 
@@ -210,8 +211,12 @@ async def feishu_events(request: Request, background_tasks: BackgroundTasks):
         return {'ok': True}
     logger.info('Feishu message received: chat_type=%s mentions=%s text=%r',
                 message.get('chat_type'), bool(message.get('mentions')), text[:200])
-    # Group conversations require a mention; otherwise the bot stays quiet.
+    # Without an @ mention, only a bare number is accepted. Ordinary group chat
+    # remains silent even when the app is allowed to receive all group messages.
     if message.get('chat_type') == 'group' and not message.get('mentions'):
+        script_number = parse_plain_script_number(text)
+        if script_number:
+            background_tasks.add_task(send_avatar_picker, chat_id, script_number)
         return {'ok': True}
     if command_without_mention(text).lower() in {'跑一条', 'runone', '/run'}:
         background_tasks.add_task(send_text, chat_id, '收到，开始处理下一条未完成文案。')

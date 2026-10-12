@@ -4,7 +4,7 @@ from unittest.mock import patch
 
 from avatar_video_workflow import (avatar_card, avatar_choices,
                                    command_without_mention, parse_card_action,
-                                   parse_script_number, generation_script,
+                                   parse_plain_script_number, parse_script_number, generation_script,
                                    estimate_video_cost)
 
 
@@ -29,6 +29,11 @@ class AvatarVideoWorkflowTests(unittest.TestCase):
         self.assertIsNone(parse_script_number('请跑脚本27吧'))
         self.assertIsNone(parse_script_number('跑脚本0'))
         self.assertIsNone(parse_script_number('跑一条'))
+
+    def test_bare_number_is_a_script_command(self):
+        self.assertEqual(parse_plain_script_number(' 27 '), 27)
+        self.assertIsNone(parse_plain_script_number('脚本27'))
+        self.assertIsNone(parse_plain_script_number('0'))
 
     def test_two_safe_default_avatar_choices(self):
         with patch.dict(os.environ, {}, clear=False):

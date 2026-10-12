@@ -37,6 +37,15 @@ def parse_script_number(text):
     return number if number > 0 else None
 
 
+def parse_plain_script_number(text):
+    """Allow a bare positive integer as the shortest group command."""
+    normalized = command_without_mention(text)
+    if not re.fullmatch(r'\d+', normalized):
+        return None
+    number = int(normalized)
+    return number if number > 0 else None
+
+
 def avatar_choices():
     """Public button labels and opaque keys; provider IDs never enter cards."""
     raw = os.getenv('AVATAR_CHOICES_JSON', '').strip()
