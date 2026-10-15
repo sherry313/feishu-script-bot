@@ -13,6 +13,10 @@ class LinkIntakeTests(unittest.TestCase):
             'https://channels.weixin.qq.com/foo/bar',
         ])
 
+    def test_extracts_douyin_link(self):
+        self.assertEqual(shared_video_links('9.2 复制 https://v.douyin.com/abc/ 打开抖音'),
+                         ['https://v.douyin.com/abc/'])
+
     def test_rejects_unrelated_links(self):
         self.assertEqual(normalize_url('https://example.com/video'), '')
 

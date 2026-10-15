@@ -92,6 +92,10 @@ def avatar_source(avatar_key):
         label = next((item['label'] for item in avatar_choices()
                       if item['key'] == avatar_key), avatar_key)
         raise RuntimeError(f'{label}脚本表尚未完成后台绑定。')
+    leo_table = (os.getenv('LEO_TABLE_ID') or os.getenv('FEISHU_TABLE_ID', '')).strip()
+    # Separate physical tables do not need the legacy 脚本库 discriminator.
+    if table_id.strip() != leo_table:
+        library = ''
     return {
         'table_id': table_id.strip(),
         'view_id': view_id.strip(),

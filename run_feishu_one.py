@@ -13,15 +13,18 @@ def main():
     parser = argparse.ArgumentParser()
     parser.add_argument('--redo-record', help='Explicitly authorized record to rewrite; preserve a backup')
     parser.add_argument('--record', help='Fill missing outputs for this record only')
+    parser.add_argument('--table', help='Feishu table ID containing the record')
     args = parser.parse_args()
-    c = Feishu()
+    c = Feishu(table_id=args.table)
     fields = {f['field_name']: f['type'] for f in c.pages('/fields')}
     for name in OUTPUTS:
         if name not in fields:
             c.request('POST', c.base+'/fields', json={'field_name':name, 'type':1})
         elif fields[name] != 1:
             raise RuntimeError('Output field type mismatch')
-    params = {'view_id':'vewhIlXf4y', 'page_size':100}
+    params = {'page_size':100}
+    if not args.table:
+        params['view_id'] = 'vewhIlXf4y'
     rows = []
     while True:
         data = c.request('GET', c.base+'/records', params=params)['data']

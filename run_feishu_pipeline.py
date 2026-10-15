@@ -15,6 +15,7 @@ import requests
 
 from core import API_BASE, _dig, _headers, cache_get, cache_put, quota
 from feishu_sync import Feishu, text_value
+from feishu_link_intake import record_video_url
 
 OUTPUTS = ['改写一', '改写二', '改写标题', '标签', '简介']
 STATE_DIR = Path(os.getenv('STATE_DIR', Path(__file__).parent))
@@ -36,7 +37,7 @@ def save_state(state):
 
 
 def link_of(value):
-    return value.get('link', '').rstrip('/') if isinstance(value, dict) else ''
+    return record_video_url(value).rstrip('/')
 
 
 def extract_one(client, record, state):
@@ -123,10 +124,11 @@ def main():
     parser = argparse.ArgumentParser()
     parser.add_argument('--next', action='store_true', help='process the first unfinished source record')
     parser.add_argument('--record', help='process this exact Feishu record')
+    parser.add_argument('--table', help='Feishu table ID containing the record')
     args = parser.parse_args()
     if not args.next and not args.record:
         parser.error('use --next or --record')
-    client = Feishu()
+    client = Feishu(table_id=args.table)
     rows = [row for row in client.pages('/records') if link_of(row.get('fields', {}).get('视频链接'))]
     if args.record:
         target = next((row for row in rows if row['record_id'] == args.record), None)
@@ -143,6 +145,8 @@ def main():
     if not original:
         raise RuntimeError('未取得原视频内容')
     command = [sys.executable, '-u', 'run_feishu_one.py', '--record', target['record_id']]
+    if args.table:
+        command.extend(['--table', args.table])
     result = subprocess.run(command, cwd=Path(__file__).parent, text=True,
                             encoding='utf-8', capture_output=True)
     if result.returncode:

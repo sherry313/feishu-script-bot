@@ -7,6 +7,9 @@ from feishu_sync import Feishu, text_value
 
 
 SUPPORTED_HOSTS = {
+    'douyin.com',
+    'www.douyin.com',
+    'v.douyin.com',
     'xiaohongshu.com',
     'www.xiaohongshu.com',
     'xhslink.com',
@@ -65,6 +68,13 @@ def _link_value(value):
     if isinstance(value, dict):
         return str(value.get('link', '')).strip().rstrip('/')
     return str(value or '').strip().rstrip('/')
+
+
+def record_video_url(value):
+    """Extract a supported URL from either a Feishu hyperlink or pasted share text."""
+    raw = value.get('link', '') if isinstance(value, dict) else str(value or '')
+    links = shared_video_links(raw)
+    return links[0] if links else ''
 
 
 def _library_value(fields):

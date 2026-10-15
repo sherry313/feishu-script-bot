@@ -26,12 +26,33 @@ from avatar_video_workflow import (apply_job_callback, avatar_card, confirmation
                                    script_record, submit_video_job)
 from heygen_video_service import accepted_job_id, wait_and_callback
 from feishu_link_intake import ingest_links, shared_video_links
+from table_auto_worker import watch_forever
 
 app = FastAPI(title='口播稿助手')
 logger = logging.getLogger('uvicorn.error')
 _seen_message_ids = set()
 _seen_lock = threading.Lock()
 _job_lock = threading.Lock()
+_watch_stop = threading.Event()
+_watch_thread = None
+
+
+@app.on_event('startup')
+def start_table_watcher():
+    global _watch_thread
+    if _watch_thread and _watch_thread.is_alive():
+        return
+    _watch_stop.clear()
+    _watch_thread = threading.Thread(
+        target=watch_forever, args=(_job_lock, _watch_stop),
+        name='feishu-table-watcher', daemon=True,
+    )
+    _watch_thread.start()
+
+
+@app.on_event('shutdown')
+def stop_table_watcher():
+    _watch_stop.set()
 
 
 def send_text(chat_id, text):
