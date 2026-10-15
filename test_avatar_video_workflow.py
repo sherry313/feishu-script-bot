@@ -3,12 +3,20 @@ import unittest
 from unittest.mock import patch
 
 from avatar_video_workflow import (avatar_card, avatar_choices, confirmation_card,
+                                   avatar_source,
                                    command_without_mention, parse_card_action,
                                    parse_plain_script_number, parse_script_number, generation_script,
                                    estimate_video_cost, script_record)
 
 
 class AvatarVideoWorkflowTests(unittest.TestCase):
+    def test_separate_leo_table_does_not_require_legacy_library_tag(self):
+        with patch.dict(os.environ, {
+            'LEO_TABLE_ID': 'table-leo',
+            'LEO_VIEW_ID': 'view-leo',
+        }, clear=False):
+            self.assertEqual(avatar_source('avatar_b')['library'], '')
+
     def test_cost_estimate_uses_script_length(self):
         estimate = estimate_video_cost('测' * 400)
         self.assertEqual(estimate['seconds'], 100)
