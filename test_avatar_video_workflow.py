@@ -6,7 +6,8 @@ from avatar_video_workflow import (avatar_card, avatar_choices, confirmation_car
                                    avatar_source,
                                    command_without_mention, parse_card_action,
                                    parse_plain_script_number, parse_script_number, generation_script,
-                                   estimate_video_cost, script_record, submitted_card)
+                                   estimate_video_cost, leo_avatar_card,
+                                   script_record, submitted_card)
 
 
 class AvatarVideoWorkflowTests(unittest.TestCase):
@@ -59,6 +60,20 @@ class AvatarVideoWorkflowTests(unittest.TestCase):
         self.assertIn('LEO脚本', rendered)
         self.assertIn('Libby脚本', rendered)
         self.assertIn('陈总脚本', rendered)
+
+    def test_leo_choice_opens_three_safe_presenter_options(self):
+        rendered = str(leo_avatar_card(65))
+        self.assertIn('数字人 1', rendered)
+        self.assertIn('数字人 2', rendered)
+        self.assertIn('数字人 3', rendered)
+        self.assertNotIn('d528add', rendered)
+        self.assertNotIn('0b1914', rendered)
+        self.assertNotIn('62893f', rendered)
+
+    def test_leo_presenters_use_leo_table(self):
+        with patch.dict(os.environ, {'LEO_TABLE_ID': 'table-leo'}, clear=False):
+            for key in ('leo_avatar_1', 'leo_avatar_2', 'leo_avatar_3'):
+                self.assertEqual(avatar_source(key)['table_id'], 'table-leo')
 
     def test_parse_card_action(self):
         payload = {'event': {

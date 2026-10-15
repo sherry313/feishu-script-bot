@@ -58,7 +58,7 @@ def _headers(json_body=False):
 
 def avatar_bindings():
     """Private API look/voice bindings. These values never enter Feishu cards."""
-    return {
+    bindings = {
         'avatar_a': {
             'avatar_id': os.getenv('AVATAR_A_LOOK_ID', '').strip(),
             'voice_id': os.getenv('AVATAR_A_VOICE_ID', '').strip(),
@@ -72,6 +72,12 @@ def avatar_bindings():
             'voice_id': os.getenv('AVATAR_LIBBY_VOICE_ID', '').strip(),
         },
     }
+    for number in (1, 2, 3):
+        bindings[f'leo_avatar_{number}'] = {
+            'avatar_id': os.getenv(f'LEO_AVATAR_{number}_LOOK_ID', '').strip(),
+            'voice_id': os.getenv('AVATAR_B_VOICE_ID', '').strip(),
+        }
+    return bindings
 
 
 def create_video_job(payload):

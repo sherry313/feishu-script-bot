@@ -72,6 +72,20 @@ def avatar_choices():
     return cleaned
 
 
+def leo_avatar_choices():
+    """Public LEO presenter labels. Private look IDs stay in service configuration."""
+    return [
+        {'key': 'leo_avatar_1', 'label': '数字人 1'},
+        {'key': 'leo_avatar_2', 'label': '数字人 2'},
+        {'key': 'leo_avatar_3', 'label': '数字人 3'},
+    ]
+
+
+def avatar_label(avatar_key):
+    choices = avatar_choices() + leo_avatar_choices()
+    return next((item['label'] for item in choices if item['key'] == avatar_key), '')
+
+
 def avatar_source(avatar_key):
     """Map a public avatar choice to its private script table and optional view."""
     settings = {
@@ -87,6 +101,9 @@ def avatar_source(avatar_key):
             os.getenv('LIBBY_TABLE_ID', ''), os.getenv('LIBBY_VIEW_ID', ''), ''
         ),
     }
+    leo_source = settings['avatar_b']
+    for item in leo_avatar_choices():
+        settings[item['key']] = leo_source
     table_id, view_id, library = settings.get(avatar_key, ('', '', ''))
     if not table_id:
         label = next((item['label'] for item in avatar_choices()
@@ -178,9 +195,33 @@ def avatar_card(number):
     }
 
 
+def leo_avatar_card(number):
+    buttons = [{
+        'tag': 'button',
+        'text': {'tag': 'plain_text', 'content': item['label']},
+        'type': 'primary',
+        'value': {
+            'action': 'select_leo_avatar',
+            'script_number': number,
+            'avatar_key': item['key'],
+        },
+    } for item in leo_avatar_choices()]
+    return {
+        'config': {'wide_screen_mode': True},
+        'header': {
+            'template': 'blue',
+            'title': {'tag': 'plain_text', 'content': f'LEO脚本 {number}｜选择数字人'},
+        },
+        'elements': [
+            {'tag': 'markdown', 'content': '请选择本次视频使用的数字人形象。'},
+            {'tag': 'action', 'actions': buttons},
+        ],
+    }
+
+
 def confirmation_card(record, avatar_key):
-    choices = {item['key']: item['label'] for item in avatar_choices()}
-    if avatar_key not in choices:
+    label = avatar_label(avatar_key)
+    if not label:
         raise RuntimeError('数字人选择无效。')
     estimate = estimate_video_cost(record['script'])
     minutes, seconds = divmod(estimate['seconds'], 60)
@@ -190,7 +231,7 @@ def confirmation_card(record, avatar_key):
         'header': {
             'template': 'orange',
             'title': {'tag': 'plain_text', 'content': (
-                f'{choices[avatar_key]}｜脚本 {record["number"]}｜确认生成'
+                f'{label}｜脚本 {record["number"]}｜确认生成'
             )},
         },
         'elements': [
@@ -228,8 +269,7 @@ def confirmation_card(record, avatar_key):
 
 def submitted_card(number, avatar_key):
     """Replacement card returned after confirmation; intentionally has no controls."""
-    choices = {item['key']: item['label'] for item in avatar_choices()}
-    label = choices.get(avatar_key, '所选脚本')
+    label = avatar_label(avatar_key) or '所选脚本'
     return {
         'config': {'wide_screen_mode': True, 'update_multi': True},
         'header': {
@@ -251,7 +291,8 @@ def parse_card_action(payload):
     value = action.get('value') or {}
     action_type = value.get('action')
     if action_type not in {
-        'select_avatar_script', 'generate_avatar_video', 'cancel_avatar_video'
+        'select_avatar_script', 'select_leo_avatar',
+        'generate_avatar_video', 'cancel_avatar_video'
     }:
         return None
     context = event.get('context') or {}
@@ -282,8 +323,8 @@ def submit_video_job(client, action):
     record = script_record(client, action['script_number'], source['view_id'],
                            source['library'])
     record_id = record['record_id']
-    choices = {item['key']: item['label'] for item in avatar_choices()}
-    if not record_id or action['avatar_key'] not in choices:
+    label = avatar_label(action['avatar_key'])
+    if not record_id or not label:
         raise RuntimeError('数字人选择无效，请重新发送“跑脚本+编号”。')
     service_url = os.getenv('AVATAR_VIDEO_SERVICE_URL', '').strip()
     service_secret = os.getenv('AVATAR_VIDEO_SERVICE_SECRET', '').strip()
@@ -326,7 +367,7 @@ def submit_video_job(client, action):
             if not response.ok or not body.get('job_id'):
                 raise RuntimeError('生成服务没有接受任务。')
             return {'duplicate': False, 'job_id': str(body['job_id']),
-                    'avatar_label': choices[action['avatar_key']]}
+                    'avatar_label': label}
         except Exception:
             client.request('PUT', client.base + '/records/' + record_id,
                            json={'fields': {'生成状态': '失败'}})

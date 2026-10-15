@@ -20,7 +20,7 @@ from fastapi.responses import JSONResponse, StreamingResponse
 from feishu_sync import API, Feishu, TABLE_URL, table_url, text_value
 from avatar_video_workflow import (apply_job_callback, avatar_card, confirmation_card,
                                    command_without_mention,
-                                   avatar_source,
+                                   avatar_source, leo_avatar_card,
                                    parse_card_action, parse_plain_script_number,
                                    parse_script_number,
                                    script_record, submitted_card, submit_video_job)
@@ -262,6 +262,14 @@ async def feishu_events(request: Request, background_tasks: BackgroundTasks):
             chat_id = action.get('chat_id', '')
             if chat_id:
                 if action['action'] == 'select_avatar_script':
+                    if action['avatar_key'] == 'avatar_b':
+                        background_tasks.add_task(
+                            send_card, chat_id, leo_avatar_card(action['script_number'])
+                        )
+                        return {'toast': {'type': 'success', 'content': '请选择数字人'}}
+                    background_tasks.add_task(send_avatar_confirmation, chat_id, action)
+                    return {'toast': {'type': 'success', 'content': '已选择，请确认成本'}}
+                if action['action'] == 'select_leo_avatar':
                     background_tasks.add_task(send_avatar_confirmation, chat_id, action)
                     return {'toast': {'type': 'success', 'content': '已选择，请确认成本'}}
                 if action['action'] == 'cancel_avatar_video':
