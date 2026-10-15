@@ -1,14 +1,49 @@
 """Small, single-submit video worker used by the Feishu avatar buttons."""
 import os
+import json
 import time
 import uuid
 import logging
+import threading
+from pathlib import Path
 
 import requests
 
 
 API_BASE = 'https://api.heygen.com'
 logger = logging.getLogger('uvicorn.error')
+JOB_STORE = Path(os.getenv('AVATAR_JOB_STORE', '/data/avatar_jobs.json'))
+_store_lock = threading.Lock()
+
+
+def _load_jobs():
+    try:
+        return json.loads(JOB_STORE.read_text(encoding='utf-8'))
+    except (FileNotFoundError, json.JSONDecodeError, OSError):
+        return {}
+
+
+def _save_job(job_id, **changes):
+    with _store_lock:
+        jobs = _load_jobs()
+        job = jobs.setdefault(job_id, {})
+        job.update(changes)
+        JOB_STORE.parent.mkdir(parents=True, exist_ok=True)
+        temporary = JOB_STORE.with_suffix('.tmp')
+        temporary.write_text(json.dumps(jobs, ensure_ascii=False), encoding='utf-8')
+        temporary.replace(JOB_STORE)
+
+
+def register_job(payload):
+    job_id = uuid.uuid4().hex
+    _save_job(job_id, state='queued', payload=payload, created_at=time.time())
+    return job_id
+
+
+def unfinished_jobs():
+    return [(job_id, item.get('payload') or {}) for job_id, item in _load_jobs().items()
+            if item.get('state') in {'queued', 'polling', 'callback_pending'}
+            and item.get('payload')]
 
 
 def _headers(json_body=False):
@@ -70,13 +105,35 @@ def create_video_job(payload):
     return str(video_id)
 
 
-def wait_and_callback(payload):
+def _post_callback(payload, status, **extra):
+    callback = {
+        'secret': os.getenv('AVATAR_VIDEO_SERVICE_SECRET', '').strip(),
+        'record_id': payload.get('record_id', ''),
+        'table_id': payload.get('table_id', ''),
+        'chat_id': payload.get('chat_id', ''),
+        'script_number': payload.get('script_number', ''),
+        'status': status,
+        **extra,
+    }
+    requests.post(payload['callback_url'], json=callback, timeout=30).raise_for_status()
+
+
+def wait_and_callback(payload, job_id=None):
     """Poll one submitted job. Never resubmit or automatically retry it."""
+    job_id = job_id or uuid.uuid4().hex
     status = 'failed'
     video_url = ''
+    video_id = ''
     try:
-        video_id = create_video_job(payload)
+        saved = _load_jobs().get(job_id, {})
+        video_id = str(saved.get('video_id', '')).strip()
+        if not video_id:
+            _save_job(job_id, state='submitting', payload=payload)
+            video_id = create_video_job(payload)
+            _save_job(job_id, state='polling', video_id=video_id)
         deadline = time.time() + 1800
+        started = time.time()
+        next_progress = 60
         while time.time() < deadline:
             response = requests.get(API_BASE + '/v3/videos/' + video_id,
                                     headers=_headers(), timeout=30)
@@ -91,24 +148,22 @@ def wait_and_callback(payload):
                 break
             if remote_status in {'failed', 'error'}:
                 break
+            elapsed = int(time.time() - started)
+            if elapsed >= next_progress:
+                try:
+                    _post_callback(payload, 'progress', elapsed_seconds=elapsed)
+                except Exception as exc:
+                    logger.warning('[avatar-video] progress notice failed: %s', exc)
+                next_progress += 180
             time.sleep(10)
     except Exception as exc:
         logger.error('[avatar-video] generation failed: %s', exc)
         status = 'failed'
 
-    callback = {
-        'secret': os.getenv('AVATAR_VIDEO_SERVICE_SECRET', '').strip(),
-        'record_id': payload.get('record_id', ''),
-        'table_id': payload.get('table_id', ''),
-        'chat_id': payload.get('chat_id', ''),
-        'script_number': payload.get('script_number', ''),
-        'status': status,
-    }
-    if video_url:
-        callback['video_url'] = video_url
-        callback['video_id'] = video_id
-    requests.post(payload['callback_url'], json=callback, timeout=30).raise_for_status()
-
-
-def accepted_job_id():
-    return uuid.uuid4().hex
+    extra = {'video_url': video_url, 'video_id': video_id} if video_url else {}
+    try:
+        _post_callback(payload, status, **extra)
+        _save_job(job_id, state=status, finished_at=time.time())
+    except Exception:
+        _save_job(job_id, state='callback_pending', status=status, **extra)
+        raise

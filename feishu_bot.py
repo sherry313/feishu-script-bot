@@ -24,7 +24,7 @@ from avatar_video_workflow import (apply_job_callback, avatar_card, confirmation
                                    parse_card_action, parse_plain_script_number,
                                    parse_script_number,
                                    script_record, submit_video_job)
-from heygen_video_service import accepted_job_id, wait_and_callback
+from heygen_video_service import register_job, unfinished_jobs, wait_and_callback
 from feishu_link_intake import ingest_links, shared_video_links
 from table_auto_worker import watch_forever
 
@@ -40,6 +40,9 @@ _watch_thread = None
 @app.on_event('startup')
 def start_table_watcher():
     global _watch_thread
+    for job_id, payload in unfinished_jobs():
+        threading.Thread(target=wait_and_callback, args=(payload, job_id),
+                         name=f'avatar-job-{job_id[:8]}', daemon=True).start()
     if os.getenv('AUTO_TABLE_WATCH_ENABLED', '1').strip().lower() not in {'1', 'true', 'yes'}:
         logger.info('Automatic table watcher is disabled')
         return
@@ -331,6 +334,18 @@ async def daily_job(request: Request, background_tasks: BackgroundTasks):
 @app.post('/avatar/jobs/callback')
 async def avatar_job_callback(request: Request, background_tasks: BackgroundTasks):
     body = await request.json()
+    if str(body.get('status', '')).strip().lower() == 'progress':
+        expected = os.getenv('AVATAR_VIDEO_SERVICE_SECRET', '').strip()
+        if not expected or body.get('secret') != expected:
+            raise HTTPException(status_code=403, detail='unauthorized')
+        chat_id = str(body.get('chat_id', '')).strip()
+        elapsed = max(1, int(body.get('elapsed_seconds') or 0) // 60)
+        if chat_id:
+            background_tasks.add_task(
+                send_text, chat_id,
+                f'视频仍在生成中，已等待约 {elapsed} 分钟。任务正常，无需重复点击。',
+            )
+        return {'ok': True}
     try:
         table_id = str(body.get('table_id', '')).strip()
         if not table_id:
@@ -356,8 +371,8 @@ async def create_avatar_job(request: Request, background_tasks: BackgroundTasks)
     required = {'record_id', 'script', 'avatar_key', 'callback_url'}
     if any(not payload.get(key) for key in required):
         raise HTTPException(status_code=400, detail='incomplete job')
-    job_id = accepted_job_id()
-    background_tasks.add_task(wait_and_callback, payload)
+    job_id = register_job(payload)
+    background_tasks.add_task(wait_and_callback, payload, job_id)
     return {'job_id': job_id}
 
 
