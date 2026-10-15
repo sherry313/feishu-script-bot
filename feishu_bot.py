@@ -25,6 +25,7 @@ from avatar_video_workflow import (apply_job_callback, avatar_card, confirmation
                                    parse_script_number,
                                    script_record, submit_video_job)
 from heygen_video_service import accepted_job_id, wait_and_callback
+from feishu_link_intake import ingest_links, shared_video_links
 
 app = FastAPI(title='口播稿助手')
 logger = logging.getLogger('uvicorn.error')
@@ -160,6 +161,38 @@ def run_next_job(chat_id=None):
         _job_lock.release()
 
 
+def ingest_and_process_links(chat_id, text):
+    """Register shared links, assign numbers, then complete the existing pipeline."""
+    if not _job_lock.acquire(blocking=False):
+        send_text(chat_id, '已有文案正在整理，请稍后再发这个链接。')
+        return
+    try:
+        items = ingest_links(text, library='LEO')
+        for item in items:
+            number = item['number']
+            if item['duplicate']:
+                send_text(chat_id, f'这个链接已经在 LEO脚本，编号 {number}，没有重复添加。')
+                continue
+            send_text(chat_id, f'已收到并写入 LEO脚本，编号 {number}。正在整理文案。')
+            result = subprocess.run(
+                [sys.executable, '-u', 'run_feishu_pipeline.py', '--record', item['record_id']],
+                cwd=Path(__file__).parent, text=True, encoding='utf-8',
+                capture_output=True, timeout=900,
+            )
+            if result.returncode:
+                detail = (result.stderr or result.stdout).strip()[-300:]
+                send_text(chat_id, f'编号 {number} 已保存，但文案整理未完成：{detail or "请稍后重试"}')
+            else:
+                send_text(chat_id, f'编号 {number} 已整理完成并回填飞书表格。\n{TABLE_URL}')
+    except subprocess.TimeoutExpired:
+        send_text(chat_id, '链接已经保存；整理超过 15 分钟，任务状态已保留，可稍后继续。')
+    except Exception as exc:
+        logger.exception('Shared link intake failed')
+        send_text(chat_id, '链接接收失败：' + str(exc))
+    finally:
+        _job_lock.release()
+
+
 def reply_for(text):
     # In a group event, Feishu represents an @ mention inside the text payload
     # (for example: <at user_id="ou_xxx">口播稿助手</at> 帮助).  Commands
@@ -235,6 +268,10 @@ async def feishu_events(request: Request, background_tasks: BackgroundTasks):
         return {'ok': True}
     logger.info('Feishu message received: chat_type=%s mentions=%s text=%r',
                 message.get('chat_type'), bool(message.get('mentions')), text[:200])
+    links = shared_video_links(text)
+    if links:
+        background_tasks.add_task(ingest_and_process_links, chat_id, text)
+        return {'ok': True}
     # Without an @ mention, only a bare number is accepted. Ordinary group chat
     # remains silent even when the app is allowed to receive all group messages.
     if message.get('chat_type') == 'group' and not message.get('mentions'):

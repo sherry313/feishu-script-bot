@@ -122,12 +122,19 @@ def extract_one(client, record, state):
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument('--next', action='store_true', help='process the first unfinished source record')
+    parser.add_argument('--record', help='process this exact Feishu record')
     args = parser.parse_args()
-    if not args.next:
-        parser.error('use --next')
+    if not args.next and not args.record:
+        parser.error('use --next or --record')
     client = Feishu()
     rows = [row for row in client.pages('/records') if link_of(row.get('fields', {}).get('视频链接'))]
-    target = next((row for row in rows if not all(text_value(row['fields'].get(k)) for k in OUTPUTS)), None)
+    if args.record:
+        target = next((row for row in rows if row['record_id'] == args.record), None)
+        if target and all(text_value(target['fields'].get(k)) for k in OUTPUTS):
+            print('记录已经处理完成')
+            return
+    else:
+        target = next((row for row in rows if not all(text_value(row['fields'].get(k)) for k in OUTPUTS)), None)
     if target is None:
         print('没有待处理记录')
         return
