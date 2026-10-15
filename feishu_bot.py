@@ -40,6 +40,9 @@ _watch_thread = None
 @app.on_event('startup')
 def start_table_watcher():
     global _watch_thread
+    if os.getenv('AUTO_TABLE_WATCH_ENABLED', '1').strip().lower() not in {'1', 'true', 'yes'}:
+        logger.info('Automatic table watcher is disabled')
+        return
     if _watch_thread and _watch_thread.is_alive():
         return
     _watch_stop.clear()

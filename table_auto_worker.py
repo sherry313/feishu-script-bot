@@ -13,7 +13,8 @@ from feishu_sync import Feishu, text_value
 
 OUTPUTS = ['改写一', '改写二', '改写标题', '标签', '简介']
 STATE_DIR = Path(os.getenv('STATE_DIR', Path(__file__).parent))
-STATE_PATH = STATE_DIR / 'table_watch_seen.json'
+STATE_EPOCH = os.getenv('TABLE_WATCH_EPOCH', '1').strip() or '1'
+STATE_PATH = STATE_DIR / f'table_watch_seen_{STATE_EPOCH}.json'
 
 
 def configured_tables():
