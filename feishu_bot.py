@@ -23,7 +23,7 @@ from avatar_video_workflow import (apply_job_callback, avatar_card, confirmation
                                    avatar_source,
                                    parse_card_action, parse_plain_script_number,
                                    parse_script_number,
-                                   script_record, submit_video_job)
+                                   script_record, submitted_card, submit_video_job)
 from heygen_video_service import register_job, unfinished_jobs, wait_and_callback
 from feishu_link_intake import ingest_links, shared_video_links
 from table_auto_worker import watch_forever
@@ -271,7 +271,10 @@ async def feishu_events(request: Request, background_tasks: BackgroundTasks):
                     )
                     return {'toast': {'type': 'info', 'content': '已取消生成'}}
                 background_tasks.add_task(run_avatar_selection, chat_id, action)
-            return {'toast': {'type': 'success', 'content': '已收到，只提交一次'}}
+            return {
+                'toast': {'type': 'success', 'content': '已收到，只提交一次'},
+                'card': submitted_card(action['script_number'], action['avatar_key']),
+            }
         return {'ok': True}
     if header.get('event_type') != 'im.message.receive_v1':
         return {'ok': True}

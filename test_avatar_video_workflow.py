@@ -6,7 +6,7 @@ from avatar_video_workflow import (avatar_card, avatar_choices, confirmation_car
                                    avatar_source,
                                    command_without_mention, parse_card_action,
                                    parse_plain_script_number, parse_script_number, generation_script,
-                                   estimate_video_cost, script_record)
+                                   estimate_video_cost, script_record, submitted_card)
 
 
 class AvatarVideoWorkflowTests(unittest.TestCase):
@@ -79,6 +79,13 @@ class AvatarVideoWorkflowTests(unittest.TestCase):
         self.assertIn('$1.67', rendered)
         self.assertIn('确认生成', rendered)
         self.assertIn('取消生成', rendered)
+
+    def test_submitted_card_has_no_clickable_controls(self):
+        card = submitted_card(65, 'avatar_b')
+        rendered = str(card)
+        self.assertIn('已提交', rendered)
+        self.assertIn('按钮已锁定', rendered)
+        self.assertNotIn("'tag': 'button'", rendered)
 
     def test_parse_cancel_card_action(self):
         payload = {'event': {

@@ -226,6 +226,25 @@ def confirmation_card(record, avatar_key):
     }
 
 
+def submitted_card(number, avatar_key):
+    """Replacement card returned after confirmation; intentionally has no controls."""
+    choices = {item['key']: item['label'] for item in avatar_choices()}
+    label = choices.get(avatar_key, '所选脚本')
+    return {
+        'config': {'wide_screen_mode': True, 'update_multi': True},
+        'header': {
+            'template': 'green',
+            'title': {'tag': 'plain_text', 'content': f'{label}｜脚本 {number}｜已提交'},
+        },
+        'elements': [
+            {'tag': 'markdown', 'content': (
+                '**视频正在生成中。**\n\n'
+                '确认按钮已锁定，请勿重复提交；完成后会自动回填原表格并通知群聊。'
+            )},
+        ],
+    }
+
+
 def parse_card_action(payload):
     event = payload.get('event') or payload
     action = event.get('action') or {}
