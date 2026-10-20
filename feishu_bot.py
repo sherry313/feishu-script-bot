@@ -21,6 +21,7 @@ from feishu_sync import API, Feishu, TABLE_URL, table_url, text_value
 from avatar_video_workflow import (apply_job_callback, avatar_card, confirmation_card,
                                    command_without_mention,
                                    avatar_source, leo_avatar_card,
+                                   locked_leo_avatar_card, locked_script_card,
                                    parse_card_action, parse_plain_script_number,
                                    parse_script_number,
                                    script_record, submitted_card, submit_video_job)
@@ -266,12 +267,27 @@ async def feishu_events(request: Request, background_tasks: BackgroundTasks):
                         background_tasks.add_task(
                             send_card, chat_id, leo_avatar_card(action['script_number'])
                         )
-                        return {'toast': {'type': 'success', 'content': '请选择数字人'}}
+                        return {
+                            'toast': {'type': 'success', 'content': '请选择数字人'},
+                            'card': locked_script_card(
+                                action['script_number'], action['avatar_key']
+                            ),
+                        }
                     background_tasks.add_task(send_avatar_confirmation, chat_id, action)
-                    return {'toast': {'type': 'success', 'content': '已选择，请确认成本'}}
+                    return {
+                        'toast': {'type': 'success', 'content': '已选择，请确认成本'},
+                        'card': locked_script_card(
+                            action['script_number'], action['avatar_key']
+                        ),
+                    }
                 if action['action'] == 'select_leo_avatar':
                     background_tasks.add_task(send_avatar_confirmation, chat_id, action)
-                    return {'toast': {'type': 'success', 'content': '已选择，请确认成本'}}
+                    return {
+                        'toast': {'type': 'success', 'content': '已选择，请确认成本'},
+                        'card': locked_leo_avatar_card(
+                            action['script_number'], action['avatar_key']
+                        ),
+                    }
                 if action['action'] == 'cancel_avatar_video':
                     background_tasks.add_task(
                         send_text, chat_id,

@@ -219,6 +219,43 @@ def leo_avatar_card(number):
     }
 
 
+def locked_script_card(number, avatar_key):
+    """Replace the script-library picker after one option is selected."""
+    label = avatar_label(avatar_key) or '所选脚本库'
+    next_step = ('下一步请选择数字人形象。' if avatar_key == 'avatar_b'
+                 else '下一步请确认文案和预计成本。')
+    return {
+        'config': {'wide_screen_mode': True, 'update_multi': True},
+        'header': {
+            'template': 'green',
+            'title': {'tag': 'plain_text', 'content': f'编号 {number}｜已选择 {label}'},
+        },
+        'elements': [
+            {'tag': 'markdown', 'content': (
+                f'已选择 **{label}**，脚本库选项已锁定，不能重复选择。\n\n{next_step}'
+            )},
+        ],
+    }
+
+
+def locked_leo_avatar_card(number, avatar_key):
+    """Replace the LEO presenter picker after one presenter is selected."""
+    label = avatar_label(avatar_key) or '所选数字人'
+    return {
+        'config': {'wide_screen_mode': True, 'update_multi': True},
+        'header': {
+            'template': 'green',
+            'title': {'tag': 'plain_text', 'content': f'LEO脚本 {number}｜已选择 {label}'},
+        },
+        'elements': [
+            {'tag': 'markdown', 'content': (
+                f'已选择 **{label}**，数字人选项已锁定，不能重复选择。\n\n'
+                '下一步请确认文案和预计成本。'
+            )},
+        ],
+    }
+
+
 def confirmation_card(record, avatar_key):
     label = avatar_label(avatar_key)
     if not label:
