@@ -112,6 +112,42 @@ def send_card(chat_id, card):
         raise RuntimeError('飞书选择卡片发送失败。')
 
 
+def update_card(message_id, card):
+    """Replace an existing interactive message after a card button click."""
+    app_id = os.getenv('FEISHU_APP_ID', '').strip()
+    app_secret = os.getenv('FEISHU_APP_SECRET', '').strip()
+    if not message_id:
+        raise RuntimeError('卡片回调缺少消息 ID。')
+    token_response = requests.post(
+        API + '/auth/v3/tenant_access_token/internal',
+        json={'app_id': app_id, 'app_secret': app_secret}, timeout=30,
+    )
+    token_body = token_response.json()
+    token = token_body.get('tenant_access_token')
+    if not token_response.ok or token_body.get('code') != 0 or not token:
+        raise RuntimeError('无法获取飞书应用访问令牌。')
+    response = requests.patch(
+        API + '/im/v1/messages/' + quote(message_id, safe=''),
+        headers={'Authorization': f'Bearer {token}'},
+        json={'msg_type': 'interactive',
+              'content': json.dumps(card, ensure_ascii=False)},
+        timeout=30,
+    )
+    body = response.json()
+    if not response.ok or body.get('code') != 0:
+        raise RuntimeError(
+            f'飞书卡片更新失败（HTTP {response.status_code}，错误码 {body.get("code")}）'
+        )
+
+
+def safely_update_card(message_id, card):
+    """Do not let a card refresh failure prevent the next workflow step."""
+    try:
+        update_card(message_id, card)
+    except Exception:
+        logger.exception('Failed to replace clicked Feishu card: message_id=%s', message_id)
+
+
 def send_avatar_picker(chat_id, number):
     try:
         send_card(chat_id, avatar_card(number))
@@ -263,30 +299,36 @@ async def feishu_events(request: Request, background_tasks: BackgroundTasks):
             chat_id = action.get('chat_id', '')
             if chat_id:
                 if action['action'] == 'select_avatar_script':
+                    background_tasks.add_task(
+                        safely_update_card, action.get('message_id', ''),
+                        locked_script_card(action['script_number'], action['avatar_key'])
+                    )
                     if action['avatar_key'] == 'avatar_b':
                         background_tasks.add_task(
                             send_card, chat_id, leo_avatar_card(action['script_number'])
                         )
-                        return locked_script_card(
-                            action['script_number'], action['avatar_key']
-                        )
+                        return {}
                     background_tasks.add_task(send_avatar_confirmation, chat_id, action)
-                    return locked_script_card(
-                        action['script_number'], action['avatar_key']
-                    )
+                    return {}
                 if action['action'] == 'select_leo_avatar':
-                    background_tasks.add_task(send_avatar_confirmation, chat_id, action)
-                    return locked_leo_avatar_card(
-                        action['script_number'], action['avatar_key']
+                    background_tasks.add_task(
+                        safely_update_card, action.get('message_id', ''),
+                        locked_leo_avatar_card(action['script_number'], action['avatar_key'])
                     )
+                    background_tasks.add_task(send_avatar_confirmation, chat_id, action)
+                    return {}
                 if action['action'] == 'cancel_avatar_video':
                     background_tasks.add_task(
                         send_text, chat_id,
                         f'已取消脚本 {action["script_number"]}，任务没有提交，不会扣费。',
                     )
                     return {'toast': {'type': 'info', 'content': '已取消生成'}}
+                background_tasks.add_task(
+                    safely_update_card, action.get('message_id', ''),
+                    submitted_card(action['script_number'], action['avatar_key'])
+                )
                 background_tasks.add_task(run_avatar_selection, chat_id, action)
-            return submitted_card(action['script_number'], action['avatar_key'])
+            return {}
         return {'ok': True}
     if header.get('event_type') != 'im.message.receive_v1':
         return {'ok': True}

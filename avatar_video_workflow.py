@@ -339,6 +339,12 @@ def parse_card_action(payload):
         'avatar_key': str(value.get('avatar_key', '')).strip(),
         'chat_id': (context.get('open_chat_id') or event.get('open_chat_id') or
                     payload.get('open_chat_id') or ''),
+        'message_id': (context.get('open_message_id') or
+                       context.get('message_id') or
+                       event.get('open_message_id') or
+                       event.get('message_id') or
+                       payload.get('open_message_id') or
+                       payload.get('message_id') or ''),
     }
 
 
