@@ -62,6 +62,14 @@ class AvatarVideoWorkflowTests(unittest.TestCase):
         self.assertIn('Libby脚本', rendered)
         self.assertIn('陈总脚本', rendered)
 
+    def test_script_picker_can_hide_unavailable_libraries(self):
+        card = avatar_card(27, [{'key': 'avatar_b', 'label': 'LEO脚本'}],
+                           ['Libby脚本（改写一为空）'])
+        rendered = str(card)
+        self.assertIn('LEO脚本', rendered)
+        self.assertIn('已自动隐藏', rendered)
+        self.assertNotIn("'content': 'Libby脚本', 'type': 'primary'", rendered)
+
     def test_leo_choice_opens_three_safe_presenter_options(self):
         rendered = str(leo_avatar_card(65))
         self.assertIn('数字人 1', rendered)
@@ -70,6 +78,14 @@ class AvatarVideoWorkflowTests(unittest.TestCase):
         self.assertNotIn('d528add', rendered)
         self.assertNotIn('0b1914', rendered)
         self.assertNotIn('62893f', rendered)
+
+    def test_presenter_picker_can_hide_invalid_provider_resource(self):
+        rendered = str(leo_avatar_card(10, [
+            {'key': 'leo_avatar_2', 'label': '数字人 2'},
+        ], ['数字人 1（当前不可用）']))
+        self.assertIn('数字人 2', rendered)
+        self.assertIn('已自动隐藏', rendered)
+        self.assertNotIn("'content': '数字人 1', 'type': 'primary'", rendered)
 
     def test_leo_presenters_use_leo_table(self):
         with patch.dict(os.environ, {'LEO_TABLE_ID': 'table-leo'}, clear=False):

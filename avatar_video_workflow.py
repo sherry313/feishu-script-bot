@@ -166,9 +166,10 @@ def script_record(client, number, view_id='', library=''):
     }
 
 
-def avatar_card(number):
+def avatar_card(number, choices=None, unavailable=None):
+    choices = avatar_choices() if choices is None else choices
     buttons = []
-    for choice in avatar_choices():
+    for choice in choices:
         buttons.append({
             'tag': 'button',
             'text': {'tag': 'plain_text', 'content': choice['label']},
@@ -179,23 +180,30 @@ def avatar_card(number):
                 'avatar_key': choice['key'],
             },
         })
+    elements = [
+        {'tag': 'markdown', 'content': (
+            f'请选择编号 **{number}** 属于哪一个脚本库。机器人只会从所选表格读取'
+            '同编号的“改写一”，确认文案和预计成本后再生成，不会混用其他表格。'
+        )},
+    ]
+    if buttons:
+        elements.append({'tag': 'action', 'actions': buttons})
+    if unavailable:
+        elements.append({'tag': 'note', 'elements': [{
+            'tag': 'plain_text', 'content': '已自动隐藏不可用脚本库：' + '；'.join(unavailable)
+        }]})
     return {
         'config': {'wide_screen_mode': True},
         'header': {
             'template': 'blue',
             'title': {'tag': 'plain_text', 'content': f'编号 {number}｜选择脚本库'},
         },
-        'elements': [
-            {'tag': 'markdown', 'content': (
-                f'请选择编号 **{number}** 属于哪一个脚本库。机器人只会从所选表格读取'
-                '同编号的“改写一”，确认文案和预计成本后再生成，不会混用其他表格。'
-            )},
-            {'tag': 'action', 'actions': buttons},
-        ],
+        'elements': elements,
     }
 
 
-def leo_avatar_card(number):
+def leo_avatar_card(number, choices=None, unavailable=None):
+    choices = leo_avatar_choices() if choices is None else choices
     buttons = [{
         'tag': 'button',
         'text': {'tag': 'plain_text', 'content': item['label']},
@@ -205,17 +213,23 @@ def leo_avatar_card(number):
             'script_number': number,
             'avatar_key': item['key'],
         },
-    } for item in leo_avatar_choices()]
+    } for item in choices]
+    elements = [
+        {'tag': 'markdown', 'content': '请选择本次视频使用的数字人形象。'},
+    ]
+    if buttons:
+        elements.append({'tag': 'action', 'actions': buttons})
+    if unavailable:
+        elements.append({'tag': 'note', 'elements': [{
+            'tag': 'plain_text', 'content': '已自动隐藏不可用数字人：' + '；'.join(unavailable)
+        }]})
     return {
         'config': {'wide_screen_mode': True},
         'header': {
             'template': 'blue',
             'title': {'tag': 'plain_text', 'content': f'LEO脚本 {number}｜选择数字人'},
         },
-        'elements': [
-            {'tag': 'markdown', 'content': '请选择本次视频使用的数字人形象。'},
-            {'tag': 'action', 'actions': buttons},
-        ],
+        'elements': elements,
     }
 
 
@@ -374,6 +388,11 @@ def submit_video_job(client, action):
     if not service_url or not service_secret:
         raise RuntimeError('视频生成服务尚未连接，任务没有提交。')
 
+    # The final safety gate is deliberately repeated immediately before any
+    # table state changes or paid provider submission.
+    from heygen_video_service import validate_avatar_binding
+    validate_avatar_binding(action['avatar_key'])
+
     with _lock_for(record_id):
         record = _fresh_record(client, record_id)
         fields = record.get('fields', {})
@@ -404,11 +423,15 @@ def submit_video_job(client, action):
                     'chat_id': action.get('chat_id', ''),
                     'callback_url': os.getenv('PUBLIC_BASE_URL', '').rstrip('/') + '/avatar/jobs/callback',
                 },
-                timeout=30,
+                timeout=90,
             )
-            body = response.json()
+            try:
+                body = response.json()
+            except ValueError:
+                body = {}
             if not response.ok or not body.get('job_id'):
-                raise RuntimeError('生成服务没有接受任务。')
+                detail = str(body.get('detail', '')).strip()
+                raise RuntimeError(detail or '生成服务没有接受任务，未进入生成队列。')
             return {'duplicate': False, 'job_id': str(body['job_id']),
                     'avatar_label': label}
         except Exception:

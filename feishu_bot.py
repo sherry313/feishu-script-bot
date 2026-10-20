@@ -20,12 +20,14 @@ from fastapi.responses import JSONResponse, StreamingResponse
 from feishu_sync import API, Feishu, TABLE_URL, table_url, text_value
 from avatar_video_workflow import (apply_job_callback, avatar_card, confirmation_card,
                                    command_without_mention,
-                                   avatar_source, leo_avatar_card,
+                                   avatar_choices, avatar_source, leo_avatar_card,
+                                   leo_avatar_choices,
                                    locked_leo_avatar_card, locked_script_card,
                                    parse_card_action, parse_plain_script_number,
                                    parse_script_number,
                                    script_record, submitted_card, submit_video_job)
-from heygen_video_service import register_job, unfinished_jobs, wait_and_callback
+from heygen_video_service import accept_job, unfinished_jobs, wait_and_callback
+from heygen_video_service import validate_avatar_binding
 from feishu_link_intake import ingest_links, shared_video_links
 from table_auto_worker import watch_forever
 
@@ -150,10 +152,42 @@ def safely_update_card(message_id, card):
 
 def send_avatar_picker(chat_id, number):
     try:
-        send_card(chat_id, avatar_card(number))
+        available = []
+        unavailable = []
+        for choice in avatar_choices():
+            try:
+                source = avatar_source(choice['key'])
+                script_record(Feishu(table_id=source['table_id']), number,
+                              source['view_id'], source['library'])
+                available.append(choice)
+            except Exception as exc:
+                unavailable.append(f'{choice["label"]}（{exc}）')
+        if not available:
+            send_text(chat_id, f'编号 {number} 在三个脚本库中都没有可生成的“改写一”，未进入生成流程。')
+            return
+        send_card(chat_id, avatar_card(number, available, unavailable))
     except Exception as exc:
         logger.exception('Failed to prepare avatar picker')
         send_text(chat_id, str(exc))
+
+
+def send_leo_picker(chat_id, number):
+    try:
+        available = []
+        unavailable = []
+        for choice in leo_avatar_choices():
+            try:
+                validate_avatar_binding(choice['key'])
+                available.append(choice)
+            except Exception as exc:
+                unavailable.append(f'{choice["label"]}（{exc}）')
+        if not available:
+            send_text(chat_id, '当前没有通过安全校验的 LEO 数字人，任务未提交。')
+            return
+        send_card(chat_id, leo_avatar_card(number, available, unavailable))
+    except Exception as exc:
+        logger.exception('Failed to validate LEO avatars')
+        send_text(chat_id, '数字人安全校验暂时无法完成，任务未提交，不会扣费。' + str(exc))
 
 
 def run_avatar_selection(chat_id, action):
@@ -171,6 +205,7 @@ def run_avatar_selection(chat_id, action):
 
 def send_avatar_confirmation(chat_id, action):
     try:
+        validate_avatar_binding(action['avatar_key'])
         source = avatar_source(action['avatar_key'])
         record = script_record(Feishu(table_id=source['table_id']),
                                action['script_number'], source['view_id'],
@@ -305,7 +340,7 @@ async def feishu_events(request: Request, background_tasks: BackgroundTasks):
                     )
                     if action['avatar_key'] == 'avatar_b':
                         background_tasks.add_task(
-                            send_card, chat_id, leo_avatar_card(action['script_number'])
+                            send_leo_picker, chat_id, action['script_number']
                         )
                         return {}
                     background_tasks.add_task(send_avatar_confirmation, chat_id, action)
@@ -412,7 +447,11 @@ async def avatar_job_callback(request: Request, background_tasks: BackgroundTask
         raise HTTPException(status_code=403, detail='unauthorized')
     chat_id = str(body.get('chat_id', '')).strip()
     if chat_id:
-        message = '视频已生成并回填到原表格。' if fields['生成状态'] == '已生成' else '视频生成失败，没有自动重试。'
+        if fields['生成状态'] == '已生成':
+            message = '视频已生成并回填到原表格。'
+        else:
+            reason = str(body.get('failure_reason', '')).strip()
+            message = '视频生成失败，没有自动重试。' + (f'\n原因：{reason}' if reason else '')
         background_tasks.add_task(send_text, chat_id, message + '\n' + table_url(table_id))
     return {'ok': True}
 
@@ -428,7 +467,11 @@ async def create_avatar_job(request: Request, background_tasks: BackgroundTasks)
     required = {'record_id', 'script', 'avatar_key', 'callback_url'}
     if any(not payload.get(key) for key in required):
         raise HTTPException(status_code=400, detail='incomplete job')
-    job_id = register_job(payload)
+    try:
+        job_id = accept_job(payload)
+    except RuntimeError as exc:
+        # No background job exists unless the provider has accepted it.
+        raise HTTPException(status_code=422, detail=str(exc)) from None
     background_tasks.add_task(wait_and_callback, payload, job_id)
     return {'job_id': job_id}
 

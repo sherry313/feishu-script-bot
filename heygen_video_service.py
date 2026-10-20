@@ -14,6 +14,8 @@ API_BASE = 'https://api.heygen.com'
 logger = logging.getLogger('uvicorn.error')
 JOB_STORE = Path(os.getenv('AVATAR_JOB_STORE', '/data/avatar_jobs.json'))
 _store_lock = threading.Lock()
+_inventory_lock = threading.Lock()
+_inventory_cache = {'expires_at': 0, 'avatar_ids': set(), 'voice_ids': set()}
 
 
 def _load_jobs():
@@ -38,6 +40,19 @@ def register_job(payload):
     job_id = uuid.uuid4().hex
     _save_job(job_id, state='queued', payload=payload, created_at=time.time())
     return job_id
+
+
+def accept_job(payload):
+    """Persist, validate, and obtain a provider video ID before acknowledging."""
+    job_id = register_job(payload)
+    try:
+        _save_job(job_id, state='submitting')
+        video_id = create_video_job(payload)
+        _save_job(job_id, state='polling', video_id=video_id)
+        return job_id
+    except Exception as exc:
+        _save_job(job_id, state='failed', error=str(exc), finished_at=time.time())
+        raise
 
 
 def unfinished_jobs():
@@ -80,7 +95,55 @@ def avatar_bindings():
     return bindings
 
 
+def _listed_ids(path, collection_name, id_name):
+    response = requests.get(API_BASE + path, headers=_headers(), timeout=20)
+    response.raise_for_status()
+    body = response.json()
+    if body.get('error'):
+        raise RuntimeError('视频平台资源校验失败。')
+    items = (body.get('data') or {}).get(collection_name) or []
+    return {str(item.get(id_name, '')).strip() for item in items
+            if isinstance(item, dict) and item.get(id_name)}
+
+
+def provider_inventory(force=False):
+    """Fetch API-visible avatars and voices. Failure closes the safety gate."""
+    now = time.time()
+    with _inventory_lock:
+        if not force and _inventory_cache['expires_at'] > now:
+            return {
+                'avatar_ids': set(_inventory_cache['avatar_ids']),
+                'voice_ids': set(_inventory_cache['voice_ids']),
+            }
+        avatar_ids = _listed_ids('/v2/avatars', 'avatars', 'avatar_id')
+        voice_ids = _listed_ids('/v2/voices', 'voices', 'voice_id')
+        if not avatar_ids or not voice_ids:
+            raise RuntimeError('视频平台没有返回可用的数字人或声音。')
+        _inventory_cache.update({
+            'expires_at': now + 300,
+            'avatar_ids': set(avatar_ids),
+            'voice_ids': set(voice_ids),
+        })
+        return {'avatar_ids': avatar_ids, 'voice_ids': voice_ids}
+
+
+def validate_avatar_binding(avatar_key, force=False):
+    """Fail closed unless both configured resources are visible to this API key."""
+    binding = avatar_bindings().get(avatar_key) or {}
+    avatar_id = binding.get('avatar_id', '')
+    voice_id = binding.get('voice_id', '')
+    if not avatar_id or not voice_id:
+        raise RuntimeError('所选数字人尚未完成后台绑定。')
+    inventory = provider_inventory(force=force)
+    if avatar_id not in inventory['avatar_ids']:
+        raise RuntimeError('所选数字人当前不可用，已禁止提交。')
+    if voice_id not in inventory['voice_ids']:
+        raise RuntimeError('所选声音当前不可用，已禁止提交。')
+    return True
+
+
 def create_video_job(payload):
+    validate_avatar_binding(payload.get('avatar_key'), force=True)
     binding = avatar_bindings().get(payload.get('avatar_key')) or {}
     if not binding.get('avatar_id') or not binding.get('voice_id'):
         raise RuntimeError('所选数字人尚未完成后台绑定。')
@@ -124,20 +187,42 @@ def _post_callback(payload, status, **extra):
     requests.post(payload['callback_url'], json=callback, timeout=30).raise_for_status()
 
 
+def _safe_failure_reason(error):
+    """Translate provider details without leaking private resource identifiers."""
+    text = str(error or '').lower()
+    if 'avatar_not_found' in text or 'avatar not found' in text:
+        return '数字人已失效或 API 账号无权使用。'
+    if 'voice' in text and ('not_found' in text or 'not found' in text or 'invalid' in text):
+        return '声音已失效或 API 账号无权使用。'
+    if 'credit' in text or 'quota' in text or 'balance' in text:
+        return '视频平台额度不足，任务已停止。'
+    if 'timeout' in text or 'timed out' in text:
+        return '视频平台连接超时，系统没有自动重复提交。'
+    return '视频平台处理失败，系统没有自动重试。'
+
+
 def wait_and_callback(payload, job_id=None):
     """Poll one submitted job. Never resubmit or automatically retry it."""
     job_id = job_id or uuid.uuid4().hex
     status = 'failed'
     video_url = ''
     video_id = ''
+    failure_reason = ''
     try:
         saved = _load_jobs().get(job_id, {})
+        if saved.get('state') == 'callback_pending':
+            retry_status = saved.get('status') or 'failed'
+            retry_extra = {key: saved[key] for key in
+                           ('video_url', 'video_id', 'failure_reason') if saved.get(key)}
+            _post_callback(payload, retry_status, **retry_extra)
+            _save_job(job_id, state=retry_status, finished_at=time.time())
+            return
         video_id = str(saved.get('video_id', '')).strip()
         if not video_id:
             _save_job(job_id, state='submitting', payload=payload)
             video_id = create_video_job(payload)
             _save_job(job_id, state='polling', video_id=video_id)
-        deadline = time.time() + 1800
+        deadline = time.time() + 7200
         started = time.time()
         next_progress = 60
         while time.time() < deadline:
@@ -153,6 +238,9 @@ def wait_and_callback(payload, job_id=None):
                 status = 'completed'
                 break
             if remote_status in {'failed', 'error'}:
+                failure_reason = _safe_failure_reason(
+                    data.get('error') or data.get('message') or remote_status
+                )
                 break
             elapsed = int(time.time() - started)
             if elapsed >= next_progress:
@@ -165,8 +253,11 @@ def wait_and_callback(payload, job_id=None):
     except Exception as exc:
         logger.error('[avatar-video] generation failed: %s', exc)
         status = 'failed'
+        failure_reason = _safe_failure_reason(exc)
 
     extra = {'video_url': video_url, 'video_id': video_id} if video_url else {}
+    if status == 'failed':
+        extra['failure_reason'] = failure_reason or '视频平台未完成任务。'
     try:
         _post_callback(payload, status, **extra)
         _save_job(job_id, state=status, finished_at=time.time())
