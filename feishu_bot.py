@@ -267,27 +267,18 @@ async def feishu_events(request: Request, background_tasks: BackgroundTasks):
                         background_tasks.add_task(
                             send_card, chat_id, leo_avatar_card(action['script_number'])
                         )
-                        return {
-                            'toast': {'type': 'success', 'content': '请选择数字人'},
-                            'card': locked_script_card(
-                                action['script_number'], action['avatar_key']
-                            ),
-                        }
-                    background_tasks.add_task(send_avatar_confirmation, chat_id, action)
-                    return {
-                        'toast': {'type': 'success', 'content': '已选择，请确认成本'},
-                        'card': locked_script_card(
+                        return locked_script_card(
                             action['script_number'], action['avatar_key']
-                        ),
-                    }
+                        )
+                    background_tasks.add_task(send_avatar_confirmation, chat_id, action)
+                    return locked_script_card(
+                        action['script_number'], action['avatar_key']
+                    )
                 if action['action'] == 'select_leo_avatar':
                     background_tasks.add_task(send_avatar_confirmation, chat_id, action)
-                    return {
-                        'toast': {'type': 'success', 'content': '已选择，请确认成本'},
-                        'card': locked_leo_avatar_card(
-                            action['script_number'], action['avatar_key']
-                        ),
-                    }
+                    return locked_leo_avatar_card(
+                        action['script_number'], action['avatar_key']
+                    )
                 if action['action'] == 'cancel_avatar_video':
                     background_tasks.add_task(
                         send_text, chat_id,
@@ -295,10 +286,7 @@ async def feishu_events(request: Request, background_tasks: BackgroundTasks):
                     )
                     return {'toast': {'type': 'info', 'content': '已取消生成'}}
                 background_tasks.add_task(run_avatar_selection, chat_id, action)
-            return {
-                'toast': {'type': 'success', 'content': '已收到，只提交一次'},
-                'card': submitted_card(action['script_number'], action['avatar_key']),
-            }
+            return submitted_card(action['script_number'], action['avatar_key'])
         return {'ok': True}
     if header.get('event_type') != 'im.message.receive_v1':
         return {'ok': True}
