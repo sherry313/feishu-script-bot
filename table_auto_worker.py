@@ -59,8 +59,15 @@ def scan_once(process_existing=False):
     first_run = not bool(state)
     candidates = []
     for label, table_id in configured_tables():
-        client = Feishu(table_id=table_id)
-        rows = list(client.pages('/records'))
+        try:
+            client = Feishu(table_id=table_id)
+            rows = list(client.pages('/records'))
+        except Exception as exc:
+            import logging
+            logging.getLogger('uvicorn.error').warning(
+                'Skipping inaccessible script table %s: %s', label, exc
+            )
+            continue
         for number, row in enumerate(rows, 1):
             rid = row['record_id']
             key = table_id + ':' + rid

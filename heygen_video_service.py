@@ -1,6 +1,7 @@
 """Small, single-submit video worker used by the Feishu avatar buttons."""
 import os
 import json
+import re
 import time
 import uuid
 import logging
@@ -128,22 +129,24 @@ def provider_inventory(force=False):
 
 
 def validate_avatar_binding(avatar_key, force=False):
-    """Fail closed unless both configured resources are visible to this API key."""
+    """Validate custom resource configuration without misusing the stock-avatar list."""
     binding = avatar_bindings().get(avatar_key) or {}
     avatar_id = binding.get('avatar_id', '')
     voice_id = binding.get('voice_id', '')
     if not avatar_id or not voice_id:
         raise RuntimeError('所选数字人尚未完成后台绑定。')
-    inventory = provider_inventory(force=force)
-    if avatar_id not in inventory['avatar_ids']:
-        raise RuntimeError('所选数字人当前不可用，已禁止提交。')
-    if voice_id not in inventory['voice_ids']:
-        raise RuntimeError('所选声音当前不可用，已禁止提交。')
+    if not all(re.fullmatch(r'[A-Za-z0-9_-]{8,80}', item)
+               for item in (avatar_id, voice_id)):
+        raise RuntimeError('所选数字人或声音的后台配置格式不正确。')
+    disabled = {item.strip() for item in
+                os.getenv('DISABLED_AVATAR_KEYS', '').split(',') if item.strip()}
+    if avatar_key in disabled:
+        raise RuntimeError('所选数字人已被安全模式停用。')
     return True
 
 
 def create_video_job(payload):
-    validate_avatar_binding(payload.get('avatar_key'), force=True)
+    validate_avatar_binding(payload.get('avatar_key'))
     binding = avatar_bindings().get(payload.get('avatar_key')) or {}
     if not binding.get('avatar_id') or not binding.get('voice_id'):
         raise RuntimeError('所选数字人尚未完成后台绑定。')

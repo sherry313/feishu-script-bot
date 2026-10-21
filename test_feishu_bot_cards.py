@@ -1,7 +1,11 @@
+import tempfile
 import unittest
+from pathlib import Path
+from unittest.mock import patch
 
 from fastapi import BackgroundTasks
 
+import feishu_bot
 from feishu_bot import feishu_events, safely_update_card
 
 
@@ -14,7 +18,18 @@ class FakeRequest:
 
 
 class CardCallbackResponseTests(unittest.IsolatedAsyncioTestCase):
-    async def test_script_selection_queues_explicit_original_card_update(self):
+    def test_same_card_stage_is_claimed_only_once(self):
+        action = {'message_id': 'om_once', 'event_id': '',
+                  'action': 'select_avatar_script'}
+        with tempfile.TemporaryDirectory() as directory, \
+                patch.object(feishu_bot, '_card_action_path',
+                             Path(directory) / 'handled.json'), \
+                patch.object(feishu_bot, '_handled_card_actions', set()):
+            self.assertTrue(feishu_bot._claim_card_action(action))
+            self.assertFalse(feishu_bot._claim_card_action(action))
+
+    @patch('feishu_bot._claim_card_action', return_value=True)
+    async def test_script_selection_queues_explicit_original_card_update(self, claim):
         payload = {
             'header': {'event_type': 'card.action.trigger'},
             'event': {
@@ -33,7 +48,8 @@ class CardCallbackResponseTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(tasks.tasks[0].args[0], 'om_test')
         self.assertNotIn("'tag': 'button'", str(tasks.tasks[0].args[1]))
 
-    async def test_presenter_selection_queues_explicit_original_card_update(self):
+    @patch('feishu_bot._claim_card_action', return_value=True)
+    async def test_presenter_selection_queues_explicit_original_card_update(self, claim):
         payload = {
             'header': {'event_type': 'card.action.trigger'},
             'event': {

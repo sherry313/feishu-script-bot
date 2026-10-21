@@ -28,23 +28,22 @@ class AvatarJobPersistenceTests(unittest.TestCase):
                 service._save_job(job_id, state='completed')
                 self.assertEqual(service.unfinished_jobs(), [])
 
-    def test_binding_validation_rejects_missing_provider_avatar(self):
-        inventory = {'avatar_ids': {'another-avatar'}, 'voice_ids': {'voice-ok'}}
+    def test_binding_validation_rejects_explicitly_disabled_custom_avatar(self):
         with patch.dict('os.environ', {
-            'LEO_AVATAR_1_LOOK_ID': 'avatar-missing',
-            'AVATAR_B_VOICE_ID': 'voice-ok',
-        }, clear=False), patch.object(service, 'provider_inventory', return_value=inventory):
-            with self.assertRaisesRegex(RuntimeError, '数字人当前不可用'):
+            'LEO_AVATAR_1_LOOK_ID': 'avatar-configured',
+            'AVATAR_B_VOICE_ID': 'voice-configured',
+            'DISABLED_AVATAR_KEYS': 'leo_avatar_1',
+        }, clear=False):
+            with self.assertRaisesRegex(RuntimeError, '安全模式停用'):
                 service.validate_avatar_binding('leo_avatar_1')
 
-    def test_binding_validation_rejects_missing_provider_voice(self):
-        inventory = {'avatar_ids': {'avatar-ok'}, 'voice_ids': {'another-voice'}}
+    def test_custom_resources_are_not_rejected_for_absence_from_stock_list(self):
         with patch.dict('os.environ', {
-            'LEO_AVATAR_1_LOOK_ID': 'avatar-ok',
-            'AVATAR_B_VOICE_ID': 'voice-missing',
-        }, clear=False), patch.object(service, 'provider_inventory', return_value=inventory):
-            with self.assertRaisesRegex(RuntimeError, '声音当前不可用'):
-                service.validate_avatar_binding('leo_avatar_1')
+            'LEO_AVATAR_2_LOOK_ID': 'custom-avatar-2',
+            'AVATAR_B_VOICE_ID': 'custom-voice-2',
+            'DISABLED_AVATAR_KEYS': '',
+        }, clear=False):
+            self.assertTrue(service.validate_avatar_binding('leo_avatar_2'))
 
     def test_accept_job_does_not_acknowledge_provider_rejection(self):
         with tempfile.TemporaryDirectory() as directory:

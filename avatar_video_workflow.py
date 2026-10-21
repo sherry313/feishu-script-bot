@@ -359,6 +359,7 @@ def parse_card_action(payload):
                        event.get('message_id') or
                        payload.get('open_message_id') or
                        payload.get('message_id') or ''),
+        'event_id': str((payload.get('header') or {}).get('event_id') or ''),
     }
 
 

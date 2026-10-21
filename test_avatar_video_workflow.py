@@ -114,6 +114,7 @@ class AvatarVideoWorkflowTests(unittest.TestCase):
         self.assertEqual(parse_card_action(payload), {
             'action': 'generate_avatar_video', 'script_number': 27,
             'avatar_key': 'avatar_b', 'chat_id': 'oc_1', 'message_id': '',
+            'event_id': '',
         })
 
     def test_confirmation_card_shows_cost_after_avatar_selection(self):
@@ -141,6 +142,7 @@ class AvatarVideoWorkflowTests(unittest.TestCase):
         self.assertEqual(parse_card_action(payload), {
             'action': 'cancel_avatar_video', 'script_number': 62,
             'avatar_key': 'avatar_b', 'chat_id': 'oc_1', 'message_id': '',
+            'event_id': '',
         })
 
     def test_video_always_uses_first_rewrite(self):

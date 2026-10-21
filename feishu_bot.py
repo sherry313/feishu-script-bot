@@ -35,9 +35,48 @@ app = FastAPI(title='口播稿助手')
 logger = logging.getLogger('uvicorn.error')
 _seen_message_ids = set()
 _seen_lock = threading.Lock()
+_card_action_lock = threading.Lock()
+_card_action_path = Path(os.getenv('STATE_DIR', '/data')) / 'handled_card_actions.json'
 _job_lock = threading.Lock()
 _watch_stop = threading.Event()
 _watch_thread = None
+
+
+def _load_handled_card_actions():
+    try:
+        values = json.loads(_card_action_path.read_text(encoding='utf-8'))
+        return set(values if isinstance(values, list) else [])
+    except (FileNotFoundError, OSError, ValueError):
+        return set()
+
+
+_handled_card_actions = _load_handled_card_actions()
+
+
+def _claim_card_action(action):
+    """Persistently accept only the first click for each card workflow stage."""
+    source_id = action.get('message_id') or action.get('event_id')
+    if not source_id:
+        return True
+    stage = action.get('action', '')
+    if stage in {'generate_avatar_video', 'cancel_avatar_video'}:
+        stage = 'final_avatar_decision'
+    key = f'{source_id}:{stage}'
+    with _card_action_lock:
+        if key in _handled_card_actions:
+            return False
+        _handled_card_actions.add(key)
+        if len(_handled_card_actions) > 5000:
+            for old in list(_handled_card_actions)[:1000]:
+                _handled_card_actions.discard(old)
+        try:
+            _card_action_path.parent.mkdir(parents=True, exist_ok=True)
+            temporary = _card_action_path.with_suffix('.tmp')
+            temporary.write_text(json.dumps(sorted(_handled_card_actions)), encoding='utf-8')
+            temporary.replace(_card_action_path)
+        except OSError:
+            logger.exception('Failed to persist Feishu card action deduplication state')
+        return True
 
 
 @app.on_event('startup')
@@ -331,6 +370,10 @@ async def feishu_events(request: Request, background_tasks: BackgroundTasks):
     if header.get('event_type') == 'card.action.trigger' or payload.get('action'):
         action = parse_card_action(payload)
         if action:
+            if not _claim_card_action(action):
+                logger.info('Ignored duplicate Feishu card action: message_id=%s action=%s',
+                            action.get('message_id'), action.get('action'))
+                return {}
             chat_id = action.get('chat_id', '')
             if chat_id:
                 if action['action'] == 'select_avatar_script':
