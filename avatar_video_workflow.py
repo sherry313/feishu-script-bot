@@ -336,6 +336,41 @@ def submitted_card(number, avatar_key):
     }
 
 
+def validating_card(number, avatar_key):
+    """Temporary locked state while the provider is deciding whether to accept."""
+    label = avatar_label(avatar_key) or '所选数字人'
+    return {
+        'config': {'wide_screen_mode': True, 'update_multi': True},
+        'header': {
+            'template': 'orange',
+            'title': {'tag': 'plain_text', 'content': f'{label}｜脚本 {number}｜正在校验'},
+        },
+        'elements': [
+            {'tag': 'markdown', 'content': (
+                '**正在请求视频平台确认数字人和声音。**\n\n'
+                '目前尚未确认提交；请勿重复操作。'
+            )},
+        ],
+    }
+
+
+def rejected_card(number, avatar_key, reason):
+    """Locked safe failure state; never contains provider IDs or raw responses."""
+    label = avatar_label(avatar_key) or '所选数字人'
+    return {
+        'config': {'wide_screen_mode': True, 'update_multi': True},
+        'header': {
+            'template': 'red',
+            'title': {'tag': 'plain_text', 'content': f'{label}｜脚本 {number}｜未提交'},
+        },
+        'elements': [
+            {'tag': 'markdown', 'content': (
+                f'**安全校验未通过，视频没有进入生成队列。**\n\n原因：{reason}'
+            )},
+        ],
+    }
+
+
 def parse_card_action(payload):
     event = payload.get('event') or payload
     action = event.get('action') or {}

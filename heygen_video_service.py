@@ -204,6 +204,10 @@ def _safe_failure_reason(error):
     return '视频平台处理失败，系统没有自动重试。'
 
 
+def safe_failure_reason(error):
+    return _safe_failure_reason(error)
+
+
 def wait_and_callback(payload, job_id=None):
     """Poll one submitted job. Never resubmit or automatically retry it."""
     job_id = job_id or uuid.uuid4().hex

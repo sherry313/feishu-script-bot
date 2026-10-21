@@ -8,7 +8,8 @@ from avatar_video_workflow import (avatar_card, avatar_choices, confirmation_car
                                    parse_plain_script_number, parse_script_number, generation_script,
                                    estimate_video_cost, leo_avatar_card,
                                    locked_leo_avatar_card, locked_script_card,
-                                   script_record, submitted_card)
+                                   rejected_card, script_record, submitted_card,
+                                   validating_card)
 
 
 class AvatarVideoWorkflowTests(unittest.TestCase):
@@ -131,6 +132,19 @@ class AvatarVideoWorkflowTests(unittest.TestCase):
         self.assertIn('已提交', rendered)
         self.assertIn('按钮已锁定', rendered)
         self.assertNotIn("'tag': 'button'", rendered)
+
+    def test_validation_card_does_not_claim_provider_accepted(self):
+        rendered = str(validating_card(9, 'leo_avatar_3'))
+        self.assertIn('正在校验', rendered)
+        self.assertIn('尚未确认提交', rendered)
+        self.assertNotIn('正在生成中', rendered)
+        self.assertNotIn("'tag': 'button'", rendered)
+
+    def test_rejected_card_contains_safe_reason_only(self):
+        rendered = str(rejected_card(9, 'leo_avatar_3', '数字人已失效。'))
+        self.assertIn('未提交', rendered)
+        self.assertIn('数字人已失效', rendered)
+        self.assertNotIn('62893', rendered)
 
     def test_parse_cancel_card_action(self):
         payload = {'event': {

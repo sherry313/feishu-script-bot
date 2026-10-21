@@ -25,9 +25,10 @@ from avatar_video_workflow import (apply_job_callback, avatar_card, confirmation
                                    locked_leo_avatar_card, locked_script_card,
                                    parse_card_action, parse_plain_script_number,
                                    parse_script_number,
-                                   script_record, submitted_card, submit_video_job)
+                                   rejected_card, script_record, submitted_card,
+                                   submit_video_job, validating_card)
 from heygen_video_service import accept_job, unfinished_jobs, wait_and_callback
-from heygen_video_service import validate_avatar_binding
+from heygen_video_service import safe_failure_reason, validate_avatar_binding
 from feishu_link_intake import ingest_links, shared_video_links
 from table_auto_worker import watch_forever
 
@@ -234,12 +235,25 @@ def run_avatar_selection(chat_id, action):
         source = avatar_source(action['avatar_key'])
         result = submit_video_job(Feishu(table_id=source['table_id']), action)
         if result['duplicate']:
+            safely_update_card(
+                action.get('message_id', ''),
+                submitted_card(action['script_number'], action['avatar_key'])
+            )
             send_text(chat_id, f'这条任务已经是“{result["status"]}”，没有重复提交。')
         else:
+            safely_update_card(
+                action.get('message_id', ''),
+                submitted_card(action['script_number'], action['avatar_key'])
+            )
             send_text(chat_id, f'已选择{result["avatar_label"]}，视频开始生成。完成后会回填到原表格。')
     except Exception as exc:
         logger.exception('Avatar video submission failed')
-        send_text(chat_id, str(exc))
+        reason = safe_failure_reason(exc)
+        safely_update_card(
+            action.get('message_id', ''),
+            rejected_card(action['script_number'], action['avatar_key'], reason)
+        )
+        send_text(chat_id, f'任务未进入生成队列，不会自动重试。\n原因：{reason}')
 
 
 def send_avatar_confirmation(chat_id, action):
@@ -403,7 +417,7 @@ async def feishu_events(request: Request, background_tasks: BackgroundTasks):
                     return {'toast': {'type': 'info', 'content': '已取消生成'}}
                 background_tasks.add_task(
                     safely_update_card, action.get('message_id', ''),
-                    submitted_card(action['script_number'], action['avatar_key'])
+                    validating_card(action['script_number'], action['avatar_key'])
                 )
                 background_tasks.add_task(run_avatar_selection, chat_id, action)
             return {}
