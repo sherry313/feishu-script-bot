@@ -12,6 +12,7 @@ OUTPUTS = ['改写一', '改写二', '改写标题', '标签', '简介']
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument('--redo-record', help='Explicitly authorized record to rewrite; preserve a backup')
+    parser.add_argument('--redo-token', help='Unique Feishu review-card token for this redo attempt')
     parser.add_argument('--record', help='Fill missing outputs for this record only')
     parser.add_argument('--table', help='Feishu table ID containing the record')
     args = parser.parse_args()
@@ -43,7 +44,14 @@ def main():
         raise RuntimeError('首条缺原文，请使用持久化taskId的转写流程后续跑；未跳过该条')
     c.request('PUT', c.base+'/records/'+rid, json={'fields':{'视频链接':before['视频链接']}})
     model = cfg('CLAUDE_MODEL', 'claude-sonnet-5')
-    key = hashlib.sha256((rid+source+model+'rules-v2-60-90sec').encode()).hexdigest()
+    key_material = rid + source + model + 'rules-v2-60-90sec'
+    if args.redo_record:
+        # A human-requested redo must not reuse the previous completed rewrite.
+        # Hash the current visible outputs so retries of the same redo resume,
+        # while a later redo after new content gets a fresh cache file.
+        redo_identity = args.redo_token or '|'.join(text_value(before.get(k)) for k in OUTPUTS)
+        key_material += '|redo|' + redo_identity
+    key = hashlib.sha256(key_material.encode()).hexdigest()
     path = Path(__file__).with_name('feishu_rewrite_'+key+'.json')
     state = json.loads(path.read_text(encoding='utf-8')) if path.exists() else {}
     def save():

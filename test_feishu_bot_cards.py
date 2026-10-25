@@ -29,6 +29,26 @@ class CardCallbackResponseTests(unittest.IsolatedAsyncioTestCase):
             self.assertFalse(feishu_bot._claim_card_action(action))
 
     @patch('feishu_bot._claim_card_action', return_value=True)
+    async def test_rewrite_approval_locks_card_and_opens_leo_picker(self, claim):
+        payload = {
+            'header': {'event_type': 'card.action.trigger'},
+            'event': {
+                'action': {'value': {
+                    'action': 'approve_rewrite',
+                    'script_number': 10,
+                    'record_id': 'rec_10',
+                }},
+                'context': {'open_chat_id': 'oc_test', 'open_message_id': 'om_review'},
+            },
+        }
+        tasks = BackgroundTasks()
+        response = await feishu_events(FakeRequest(payload), tasks)
+        self.assertEqual(response, {})
+        self.assertIs(tasks.tasks[0].func, safely_update_card)
+        self.assertNotIn("'tag': 'button'", str(tasks.tasks[0].args[1]))
+        self.assertIs(tasks.tasks[1].func, feishu_bot.approve_rewrite)
+
+    @patch('feishu_bot._claim_card_action', return_value=True)
     async def test_script_selection_queues_explicit_original_card_update(self, claim):
         payload = {
             'header': {'event_type': 'card.action.trigger'},

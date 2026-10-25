@@ -8,6 +8,7 @@ from avatar_video_workflow import (avatar_card, avatar_choices, confirmation_car
                                    parse_plain_script_number, parse_script_number, generation_script,
                                    estimate_video_cost, leo_avatar_card,
                                    locked_leo_avatar_card, locked_script_card,
+                                   locked_rewrite_review_card, rewrite_review_card,
                                    rejected_card, script_record, submitted_card,
                                    validating_card)
 
@@ -80,6 +81,20 @@ class AvatarVideoWorkflowTests(unittest.TestCase):
         self.assertNotIn('0b1914', rendered)
         self.assertNotIn('62893f', rendered)
 
+    def test_rewrite_review_is_a_human_gate_before_avatar_selection(self):
+        rendered = str(rewrite_review_card(12, 'rec_12', '测试标题'))
+        self.assertIn('人工审核文案', rendered)
+        self.assertIn('确认文案，下一步', rendered)
+        self.assertIn('重新改写', rendered)
+        self.assertIn('approve_rewrite', rendered)
+        self.assertIn('redo_rewrite', rendered)
+        self.assertIn('rec_12', rendered)
+
+    def test_locked_rewrite_review_has_no_clickable_controls(self):
+        rendered = str(locked_rewrite_review_card(12, True))
+        self.assertIn('文案已确认', rendered)
+        self.assertNotIn("'tag': 'button'", rendered)
+
     def test_presenter_picker_can_hide_invalid_provider_resource(self):
         rendered = str(leo_avatar_card(10, [
             {'key': 'leo_avatar_2', 'label': '数字人 2'},
@@ -114,7 +129,7 @@ class AvatarVideoWorkflowTests(unittest.TestCase):
         }}
         self.assertEqual(parse_card_action(payload), {
             'action': 'generate_avatar_video', 'script_number': 27,
-            'avatar_key': 'avatar_b', 'chat_id': 'oc_1', 'message_id': '',
+            'record_id': '', 'avatar_key': 'avatar_b', 'chat_id': 'oc_1', 'message_id': '',
             'event_id': '',
         })
 
@@ -155,7 +170,7 @@ class AvatarVideoWorkflowTests(unittest.TestCase):
         }}
         self.assertEqual(parse_card_action(payload), {
             'action': 'cancel_avatar_video', 'script_number': 62,
-            'avatar_key': 'avatar_b', 'chat_id': 'oc_1', 'message_id': '',
+            'record_id': '', 'avatar_key': 'avatar_b', 'chat_id': 'oc_1', 'message_id': '',
             'event_id': '',
         })
 
@@ -166,6 +181,27 @@ class AvatarVideoWorkflowTests(unittest.TestCase):
 
     def test_missing_first_rewrite_does_not_fall_back(self):
         self.assertEqual(generation_script({'口播稿': '原始口播稿'}), '')
+
+    @patch('avatar_video_workflow._fresh_record')
+    @patch('avatar_video_workflow.script_record')
+    @patch('avatar_video_workflow.validate_avatar_binding', create=True)
+    def test_leo_video_submission_requires_human_approval(self, validate, script, fresh):
+        # Import inside the test so the final safety gate uses the patched module member.
+        import avatar_video_workflow as workflow
+        script.return_value = {'record_id': 'rec_1', 'number': 1, 'title': 't',
+                               'script': '已改写文案', 'status': '待确认'}
+        fresh.return_value = {'fields': {'改写一': '已改写文案', '生成状态': '待确认'}}
+        client = unittest.mock.Mock()
+        client.table_id = 'table-leo'
+        with patch.dict(os.environ, {
+            'LEO_TABLE_ID': 'table-leo',
+            'AVATAR_VIDEO_SERVICE_URL': 'https://service.invalid',
+            'AVATAR_VIDEO_SERVICE_SECRET': 'secret',
+        }, clear=False), patch('heygen_video_service.validate_avatar_binding'):
+            with self.assertRaisesRegex(RuntimeError, '尚未人工确认'):
+                workflow.submit_video_job(client, {
+                    'avatar_key': 'leo_avatar_1', 'script_number': 1,
+                })
 
     @patch('avatar_video_workflow.records_in_view')
     def test_script_number_is_scoped_to_selected_library(self, records):

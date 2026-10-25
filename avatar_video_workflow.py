@@ -233,6 +233,68 @@ def leo_avatar_card(number, choices=None, unavailable=None):
     }
 
 
+def rewrite_review_card(number, record_id, title=''):
+    """Ask a human to approve the table's current rewrite before video steps."""
+    heading = (title or f'脚本 {number}').strip()
+    return {
+        'config': {'wide_screen_mode': True},
+        'header': {
+            'template': 'orange',
+            'title': {'tag': 'plain_text', 'content': f'编号 {number}｜人工审核文案'},
+        },
+        'elements': [
+            {'tag': 'markdown', 'content': (
+                f'**{heading}**\n\n'
+                '请先在飞书表格检查或修改「改写一」。\n'
+                '文案没问题后点「确认文案，下一步」；质量不合格可点「重新改写」。\n\n'
+                '**未经人工确认，不会提交 HeyGen。**'
+            )},
+            {'tag': 'action', 'actions': [
+                {
+                    'tag': 'button',
+                    'text': {'tag': 'plain_text', 'content': '确认文案，下一步'},
+                    'type': 'primary',
+                    'value': {
+                        'action': 'approve_rewrite',
+                        'script_number': number,
+                        'record_id': record_id,
+                    },
+                },
+                {
+                    'tag': 'button',
+                    'text': {'tag': 'plain_text', 'content': '重新改写'},
+                    'type': 'default',
+                    'value': {
+                        'action': 'redo_rewrite',
+                        'script_number': number,
+                        'record_id': record_id,
+                    },
+                },
+            ]},
+        ],
+    }
+
+
+def locked_rewrite_review_card(number, approved):
+    """Replace a review card after either human decision; no buttons remain."""
+    if approved:
+        title = f'编号 {number}｜文案已确认'
+        content = '文案审核已锁定。下一步请选择数字人形象。'
+        template = 'green'
+    else:
+        title = f'编号 {number}｜正在重新改写'
+        content = '正在基于原始转写重新生成文案；本卡片已锁定，请等待新的审核卡片。'
+        template = 'orange'
+    return {
+        'config': {'wide_screen_mode': True, 'update_multi': True},
+        'header': {
+            'template': template,
+            'title': {'tag': 'plain_text', 'content': title},
+        },
+        'elements': [{'tag': 'markdown', 'content': content}],
+    }
+
+
 def locked_script_card(number, avatar_key):
     """Replace the script-library picker after one option is selected."""
     label = avatar_label(avatar_key) or '所选脚本库'
@@ -377,6 +439,7 @@ def parse_card_action(payload):
     value = action.get('value') or {}
     action_type = value.get('action')
     if action_type not in {
+        'approve_rewrite', 'redo_rewrite',
         'select_avatar_script', 'select_leo_avatar',
         'generate_avatar_video', 'cancel_avatar_video'
     }:
@@ -385,6 +448,7 @@ def parse_card_action(payload):
     return {
         'action': action_type,
         'script_number': int(value.get('script_number') or 0),
+        'record_id': str(value.get('record_id', '')).strip(),
         'avatar_key': str(value.get('avatar_key', '')).strip(),
         'chat_id': (context.get('open_chat_id') or event.get('open_chat_id') or
                     payload.get('open_chat_id') or ''),
@@ -439,6 +503,9 @@ def submit_video_job(client, action):
         script = generation_script(fields)
         if not script:
             raise RuntimeError('这条记录的“改写一”为空，任务没有提交。')
+        if action['avatar_key'].startswith('leo_avatar_') and status not in {
+                '文案已确认', '失败'}:
+            raise RuntimeError('文案尚未人工确认，任务没有提交。')
 
         # Mark first.  There is deliberately no automatic retry if the remote
         # result is ambiguous; a human may explicitly submit again after failure.

@@ -23,6 +23,7 @@ from avatar_video_workflow import (apply_job_callback, avatar_card, confirmation
                                    avatar_choices, avatar_source, leo_avatar_card,
                                    leo_avatar_choices,
                                    locked_leo_avatar_card, locked_script_card,
+                                   locked_rewrite_review_card, rewrite_review_card,
                                    parse_card_action, parse_plain_script_number,
                                    parse_script_number,
                                    rejected_card, script_record, submitted_card,
@@ -62,6 +63,8 @@ def _claim_card_action(action):
     stage = action.get('action', '')
     if stage in {'generate_avatar_video', 'cancel_avatar_video'}:
         stage = 'final_avatar_decision'
+    if stage in {'approve_rewrite', 'redo_rewrite'}:
+        stage = 'rewrite_review_decision'
     key = f'{source_id}:{stage}'
     with _card_action_lock:
         if key in _handled_card_actions:
@@ -190,6 +193,72 @@ def safely_update_card(message_id, card):
         logger.exception('Failed to replace clicked Feishu card: message_id=%s', message_id)
 
 
+def send_rewrite_review(chat_id, number, record_id):
+    """Send the human quality gate after rereading the current Feishu record."""
+    client = Feishu(table_id=os.getenv('LEO_TABLE_ID') or os.getenv('FEISHU_TABLE_ID', ''))
+    body = client.request('GET', client.base + '/records/' + record_id)
+    fields = body['data']['record'].get('fields', {})
+    if not text_value(fields.get('改写一')).strip():
+        raise RuntimeError(f'编号 {number} 的「改写一」仍为空，无法进入人工审核。')
+    title = text_value(fields.get('改写标题')).strip() or text_value(fields.get('标题')).strip()
+    send_card(chat_id, rewrite_review_card(number, record_id, title))
+
+
+def redo_rewrite(chat_id, action):
+    """Run one explicitly requested fresh rewrite and return to the human gate."""
+    record_id = action.get('record_id', '')
+    number = action['script_number']
+    if not record_id:
+        send_text(chat_id, '重新改写缺少记录 ID，未执行。')
+        return
+    if not _job_lock.acquire(blocking=False):
+        send_text(chat_id, '已有文案正在处理，请稍后再点「重新改写」。')
+        return
+    try:
+        table_id = os.getenv('LEO_TABLE_ID') or os.getenv('FEISHU_TABLE_ID', '')
+        redo_token = action.get('message_id') or action.get('event_id') or record_id
+        result = subprocess.run(
+            [sys.executable, '-u', 'run_feishu_one.py', '--redo-record', record_id,
+             '--table', table_id, '--redo-token', redo_token],
+            cwd=Path(__file__).parent, text=True, encoding='utf-8',
+            capture_output=True, timeout=900,
+        )
+        if result.returncode:
+            detail = (result.stderr or result.stdout).strip()[-300:]
+            send_text(chat_id, f'编号 {number} 重新改写失败：{detail or "请稍后重试"}')
+            return
+        client = Feishu(table_id=table_id)
+        client.request('PUT', client.base + '/records/' + record_id,
+                       json={'fields': {'生成状态': '待确认'}})
+        send_rewrite_review(chat_id, number, record_id)
+        send_text(chat_id, f'编号 {number} 已重新改写并回填表格，请再次人工审核。\n{TABLE_URL}')
+    except subprocess.TimeoutExpired:
+        send_text(chat_id, f'编号 {number} 重新改写超时，不会进入 HeyGen。')
+    except Exception as exc:
+        logger.exception('Rewrite redo failed')
+        send_text(chat_id, f'编号 {number} 重新改写失败：{exc}')
+    finally:
+        _job_lock.release()
+
+
+def approve_rewrite(chat_id, action):
+    """Persist the human decision before exposing any paid video action."""
+    number = action['script_number']
+    record_id = action.get('record_id', '')
+    try:
+        source = avatar_source('avatar_b')
+        client = Feishu(table_id=source['table_id'])
+        record = script_record(client, number, source['view_id'], source['library'])
+        if not record_id or record['record_id'] != record_id:
+            raise RuntimeError('表格顺序已变化，请重新发送原链接获取新审核卡。')
+        client.request('PUT', client.base + '/records/' + record_id,
+                       json={'fields': {'生成状态': '文案已确认'}})
+        send_leo_picker(chat_id, number)
+    except Exception as exc:
+        logger.exception('Rewrite approval failed')
+        send_text(chat_id, f'编号 {number} 文案确认失败，未进入 HeyGen：{exc}')
+
+
 def send_avatar_picker(chat_id, number):
     try:
         available = []
@@ -197,8 +266,11 @@ def send_avatar_picker(chat_id, number):
         for choice in avatar_choices():
             try:
                 source = avatar_source(choice['key'])
-                script_record(Feishu(table_id=source['table_id']), number,
-                              source['view_id'], source['library'])
+                record = script_record(Feishu(table_id=source['table_id']), number,
+                                       source['view_id'], source['library'])
+                if choice['key'] == 'avatar_b' and record['status'] not in {
+                        '文案已确认', '失败', '生成中', '已生成'}:
+                    raise RuntimeError('文案尚未人工确认')
                 available.append(choice)
             except Exception as exc:
                 unavailable.append(f'{choice["label"]}（{exc}）')
@@ -324,8 +396,8 @@ def ingest_and_process_links(chat_id, text):
             number = item['number']
             if item['duplicate']:
                 send_text(chat_id, f'这个链接已经在 LEO脚本，编号 {number}，没有重复添加。')
-                continue
-            send_text(chat_id, f'已收到并写入 LEO脚本，编号 {number}。正在整理文案。')
+            else:
+                send_text(chat_id, f'已收到并写入 LEO脚本，编号 {number}。正在整理文案。')
             result = subprocess.run(
                 [sys.executable, '-u', 'run_feishu_pipeline.py', '--record', item['record_id']],
                 cwd=Path(__file__).parent, text=True, encoding='utf-8',
@@ -335,7 +407,8 @@ def ingest_and_process_links(chat_id, text):
                 detail = (result.stderr or result.stdout).strip()[-300:]
                 send_text(chat_id, f'编号 {number} 已保存，但文案整理未完成：{detail or "请稍后重试"}')
             else:
-                send_text(chat_id, f'编号 {number} 已整理完成并回填飞书表格。\n{TABLE_URL}')
+                send_rewrite_review(chat_id, number, item['record_id'])
+                send_text(chat_id, f'编号 {number} 已整理完成并回填飞书表格，请人工审核后再进入视频生成。\n{TABLE_URL}')
     except subprocess.TimeoutExpired:
         send_text(chat_id, '链接已经保存；整理超过 15 分钟，任务状态已保留，可稍后继续。')
     except Exception as exc:
@@ -390,6 +463,20 @@ async def feishu_events(request: Request, background_tasks: BackgroundTasks):
                 return {}
             chat_id = action.get('chat_id', '')
             if chat_id:
+                if action['action'] == 'approve_rewrite':
+                    background_tasks.add_task(
+                        safely_update_card, action.get('message_id', ''),
+                        locked_rewrite_review_card(action['script_number'], True)
+                    )
+                    background_tasks.add_task(approve_rewrite, chat_id, action)
+                    return {}
+                if action['action'] == 'redo_rewrite':
+                    background_tasks.add_task(
+                        safely_update_card, action.get('message_id', ''),
+                        locked_rewrite_review_card(action['script_number'], False)
+                    )
+                    background_tasks.add_task(redo_rewrite, chat_id, action)
+                    return {}
                 if action['action'] == 'select_avatar_script':
                     background_tasks.add_task(
                         safely_update_card, action.get('message_id', ''),
