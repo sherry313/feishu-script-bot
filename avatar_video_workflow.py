@@ -298,7 +298,7 @@ def locked_rewrite_review_card(number, approved):
 def locked_script_card(number, avatar_key):
     """Replace the script-library picker after one option is selected."""
     label = avatar_label(avatar_key) or '所选脚本库'
-    next_step = ('下一步请选择数字人形象。' if avatar_key == 'avatar_b'
+    next_step = ('下一步审核文案；审核通过后再选择数字人形象。' if avatar_key == 'avatar_b'
                  else '下一步请确认文案和预计成本。')
     return {
         'config': {'wide_screen_mode': True, 'update_multi': True},

@@ -266,11 +266,8 @@ def send_avatar_picker(chat_id, number):
         for choice in avatar_choices():
             try:
                 source = avatar_source(choice['key'])
-                record = script_record(Feishu(table_id=source['table_id']), number,
-                                       source['view_id'], source['library'])
-                if choice['key'] == 'avatar_b' and record['status'] not in {
-                        '文案已确认', '失败', '生成中', '已生成'}:
-                    raise RuntimeError('文案尚未人工确认')
+                script_record(Feishu(table_id=source['table_id']), number,
+                              source['view_id'], source['library'])
                 available.append(choice)
             except Exception as exc:
                 unavailable.append(f'{choice["label"]}（{exc}）')
@@ -281,6 +278,25 @@ def send_avatar_picker(chat_id, number):
     except Exception as exc:
         logger.exception('Failed to prepare avatar picker')
         send_text(chat_id, str(exc))
+
+
+def route_leo_selection(chat_id, number):
+    """Resume a pending LEO script at review; only approved scripts reach avatars."""
+    try:
+        source = avatar_source('avatar_b')
+        record = script_record(Feishu(table_id=source['table_id']), number,
+                               source['view_id'], source['library'])
+        if record['status'] not in {'文案已确认', '失败', '生成中', '已生成'}:
+            send_rewrite_review(chat_id, number, record['record_id'])
+            send_text(chat_id, (
+                f'编号 {number} 的文案已经存在，目前等待人工确认。'
+                '请检查表格中的「改写一」；确认后才会进入数字人生成。\n' + TABLE_URL
+            ))
+            return
+        send_leo_picker(chat_id, number)
+    except Exception as exc:
+        logger.exception('Failed to route LEO script selection')
+        send_text(chat_id, f'编号 {number} 无法进入下一步：{exc}')
 
 
 def send_leo_picker(chat_id, number):
@@ -484,7 +500,7 @@ async def feishu_events(request: Request, background_tasks: BackgroundTasks):
                     )
                     if action['avatar_key'] == 'avatar_b':
                         background_tasks.add_task(
-                            send_leo_picker, chat_id, action['script_number']
+                            route_leo_selection, chat_id, action['script_number']
                         )
                         return {}
                     background_tasks.add_task(send_avatar_confirmation, chat_id, action)
