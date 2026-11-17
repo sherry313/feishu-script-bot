@@ -66,7 +66,7 @@ class AvatarVideoWorkflowTests(unittest.TestCase):
 
     def test_script_picker_can_hide_unavailable_libraries(self):
         card = avatar_card(27, [{'key': 'avatar_b', 'label': 'LEO脚本'}],
-                           ['Libby脚本（改写一为空）'])
+                           ['Libby脚本（口播稿为空）'])
         rendered = str(card)
         self.assertIn('LEO脚本', rendered)
         self.assertIn('已自动隐藏', rendered)
@@ -82,12 +82,12 @@ class AvatarVideoWorkflowTests(unittest.TestCase):
         self.assertNotIn('62893f', rendered)
 
     def test_rewrite_review_is_a_human_gate_before_avatar_selection(self):
-        rendered = str(rewrite_review_card(12, 'rec_12', '测试标题'))
+        rendered = str(rewrite_review_card(12, 'rec_12', '测试标题', '这是口播稿正文'))
         self.assertIn('人工审核文案', rendered)
         self.assertIn('确认文案，下一步', rendered)
-        self.assertIn('重新改写', rendered)
+        self.assertIn('这是口播稿正文', rendered)
         self.assertIn('approve_rewrite', rendered)
-        self.assertIn('redo_rewrite', rendered)
+        self.assertNotIn('redo_rewrite', rendered)
         self.assertIn('rec_12', rendered)
 
     def test_locked_rewrite_review_has_no_clickable_controls(self):
@@ -129,8 +129,8 @@ class AvatarVideoWorkflowTests(unittest.TestCase):
         }}
         self.assertEqual(parse_card_action(payload), {
             'action': 'generate_avatar_video', 'script_number': 27,
-            'record_id': '', 'avatar_key': 'avatar_b', 'chat_id': 'oc_1', 'message_id': '',
-            'event_id': '',
+            'record_id': '', 'avatar_key': 'avatar_b', 'script_hash': '',
+            'chat_id': 'oc_1', 'message_id': '', 'event_id': '',
         })
 
     def test_confirmation_card_shows_cost_after_avatar_selection(self):
@@ -170,17 +170,17 @@ class AvatarVideoWorkflowTests(unittest.TestCase):
         }}
         self.assertEqual(parse_card_action(payload), {
             'action': 'cancel_avatar_video', 'script_number': 62,
-            'record_id': '', 'avatar_key': 'avatar_b', 'chat_id': 'oc_1', 'message_id': '',
-            'event_id': '',
+            'record_id': '', 'avatar_key': 'avatar_b', 'script_hash': '',
+            'chat_id': 'oc_1', 'message_id': '', 'event_id': '',
         })
 
-    def test_video_always_uses_first_rewrite(self):
-        fields = {'口播稿': '原始口播稿', '改写一': '最终用于生成的视频文案',
-                  '改写二': '另一版改写'}
-        self.assertEqual(generation_script(fields), '最终用于生成的视频文案')
+    def test_video_uses_the_script_column_not_the_rewrites(self):
+        fields = {'口播稿': '原始口播稿', '改写一': '另一版改写', '改写二': '再一版'}
+        self.assertEqual(generation_script(fields), '原始口播稿')
 
-    def test_missing_first_rewrite_does_not_fall_back(self):
-        self.assertEqual(generation_script({'口播稿': '原始口播稿'}), '')
+    def test_empty_script_does_not_fall_back_to_a_rewrite(self):
+        self.assertEqual(generation_script({'改写一': '改写文案'}), '')
+        self.assertEqual(generation_script({'口播稿': '  ', '改写一': '改写文案'}), '')
 
     @patch('avatar_video_workflow._fresh_record')
     @patch('avatar_video_workflow.script_record')
@@ -190,7 +190,7 @@ class AvatarVideoWorkflowTests(unittest.TestCase):
         import avatar_video_workflow as workflow
         script.return_value = {'record_id': 'rec_1', 'number': 1, 'title': 't',
                                'script': '已改写文案', 'status': '待确认'}
-        fresh.return_value = {'fields': {'改写一': '已改写文案', '生成状态': '待确认'}}
+        fresh.return_value = {'fields': {'口播稿': '已改写文案', '生成状态': '待确认'}}
         client = unittest.mock.Mock()
         client.table_id = 'table-leo'
         with patch.dict(os.environ, {
@@ -201,15 +201,16 @@ class AvatarVideoWorkflowTests(unittest.TestCase):
             with self.assertRaisesRegex(RuntimeError, '尚未人工确认'):
                 workflow.submit_video_job(client, {
                     'avatar_key': 'leo_avatar_1', 'script_number': 1,
+                    'script_hash': workflow.script_digest('已改写文案'),
                 })
 
     @patch('avatar_video_workflow.records_in_view')
     def test_script_number_is_scoped_to_selected_library(self, records):
         records.return_value = [
             {'record_id': 'leo-1', 'fields': {
-                '脚本库': 'LEO', '标题': 'LEO内容', '改写一': 'LEO文案'}},
+                '脚本库': 'LEO', '标题': 'LEO内容', '口播稿': 'LEO文案'}},
             {'record_id': 'libby-1', 'fields': {
-                '脚本库': 'Libby', '标题': 'Libby内容', '改写一': 'Libby文案'}},
+                '脚本库': 'Libby', '标题': 'Libby内容', '口播稿': 'Libby文案'}},
         ]
         record = script_record(object(), 1, 'view-libby', 'Libby')
         self.assertEqual(record['record_id'], 'libby-1')

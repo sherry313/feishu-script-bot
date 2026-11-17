@@ -103,9 +103,12 @@ class PendingRewriteRoutingTests(unittest.IsolatedAsyncioTestCase):
             'script': '已有改写一', 'title': '标题',
         }
 
-        feishu_bot.route_leo_selection('oc_test', 33)
+        with patch.object(feishu_bot, 'approved_digest',
+                          return_value=feishu_bot.script_digest('已有改写一')):
+            feishu_bot.route_leo_selection('oc_test', 33)
 
-        send_picker.assert_called_once_with('oc_test', 33)
+        send_picker.assert_called_once_with(
+            'oc_test', 33, script_hash=feishu_bot.script_digest('已有改写一'))
 
     @patch('feishu_bot._claim_card_action', return_value=True)
     async def test_presenter_selection_queues_explicit_original_card_update(self, claim):

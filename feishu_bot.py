@@ -28,7 +28,10 @@ from avatar_video_workflow import (apply_job_callback, avatar_card, confirmation
                                    parse_script_number,
                                    rejected_card, script_record, submitted_card,
                                    blocked_card, cancelled_card, notice_card,
-                                   submit_video_job, validating_card)
+                                   submit_video_job, validating_card,
+                                   ScriptChangedError, generation_script, script_digest,
+                                   FULL_ON_CARD, approved_digest, record_approval,
+                                   script_parts)
 from heygen_video_service import accept_job, unfinished_jobs, wait_and_callback
 from heygen_video_service import safe_failure_reason, validate_avatar_binding
 from feishu_link_intake import ingest_links, shared_video_links
@@ -194,6 +197,16 @@ def safely_update_card(message_id, card):
         logger.exception('Failed to replace clicked Feishu card: message_id=%s', message_id)
 
 
+def send_script_parts(chat_id, number, script):
+    """A script too long for the card is delivered in full, as plain text, in order."""
+    text = (script or '').strip()
+    if len(text) <= FULL_ON_CARD:
+        return
+    parts = script_parts(text)
+    for index, part in enumerate(parts, 1):
+        send_text(chat_id, f'【编号 {number} 口播稿 第 {index}/{len(parts)} 段｜共 {len(text)} 字】\n{part}')
+
+
 def _on(message_id):
     """Keyword for 'show this step on the clicked card'; empty means send a new card."""
     return {'message_id': message_id} if message_id else {}
@@ -231,47 +244,22 @@ def send_rewrite_review(chat_id, number, record_id, message_id=''):
     client = Feishu(table_id=os.getenv('LEO_TABLE_ID') or os.getenv('FEISHU_TABLE_ID', ''))
     body = client.request('GET', client.base + '/records/' + record_id)
     fields = body['data']['record'].get('fields', {})
-    if not text_value(fields.get('改写一')).strip():
-        raise RuntimeError(f'编号 {number} 的「改写一」仍为空，无法进入人工审核。')
-    title = text_value(fields.get('改写标题')).strip() or text_value(fields.get('标题')).strip()
-    show_card(chat_id, message_id, rewrite_review_card(number, record_id, title))
+    script = generation_script(fields)
+    if not script:
+        raise RuntimeError(f'编号 {number} 的「口播稿」是空的，无法进入人工审核。')
+    title = text_value(fields.get('标题')).strip() or text_value(fields.get('改写标题')).strip()
+    send_script_parts(chat_id, number, script)   # raises => no approve button is ever shown
+    show_card(chat_id, message_id, rewrite_review_card(number, record_id, title, script))
 
 
 def redo_rewrite(chat_id, action):
-    """Run one explicitly requested fresh rewrite and return to the human gate."""
-    record_id = action.get('record_id', '')
+    """Retired: old review cards may still send this action; it does nothing."""
     number = action['script_number']
-    if not record_id:
-        send_text(chat_id, '重新改写缺少记录 ID，未执行。')
-        return
-    if not _job_lock.acquire(blocking=False):
-        send_text(chat_id, '已有文案正在处理，请稍后再点「重新改写」。')
-        return
-    try:
-        table_id = os.getenv('LEO_TABLE_ID') or os.getenv('FEISHU_TABLE_ID', '')
-        redo_token = action.get('message_id') or action.get('event_id') or record_id
-        result = subprocess.run(
-            [sys.executable, '-u', 'run_feishu_one.py', '--redo-record', record_id,
-             '--table', table_id, '--redo-token', redo_token],
-            cwd=Path(__file__).parent, text=True, encoding='utf-8',
-            capture_output=True, timeout=900,
-        )
-        if result.returncode:
-            detail = (result.stderr or result.stdout).strip()[-300:]
-            send_text(chat_id, f'编号 {number} 重新改写失败：{detail or "请稍后重试"}')
-            return
-        client = Feishu(table_id=table_id)
-        client.request('PUT', client.base + '/records/' + record_id,
-                       json={'fields': {'生成状态': '待确认'}})
-        send_rewrite_review(chat_id, number, record_id)
-        send_text(chat_id, f'编号 {number} 已重新改写并回填表格，请再次人工审核。\n{TABLE_URL}')
-    except subprocess.TimeoutExpired:
-        send_text(chat_id, f'编号 {number} 重新改写超时，不会进入 HeyGen。')
-    except Exception as exc:
-        logger.exception('Rewrite redo failed')
-        send_text(chat_id, f'编号 {number} 重新改写失败：{exc}')
-    finally:
-        _job_lock.release()
+    # Video now uses the 口播稿 column directly, so a rewrite no longer changes what is
+    # generated. Old review cards may still carry this button: do nothing, spend nothing.
+    send_text(chat_id, f'编号 {number}：该按钮已停用，视频直接使用「口播稿」。'
+                       '请重新发送编号，查看最新审核卡。')
+    return
 
 
 def approve_rewrite(chat_id, action):
@@ -284,9 +272,15 @@ def approve_rewrite(chat_id, action):
         record = script_record(client, number, source['view_id'], source['library'])
         if not record_id or record['record_id'] != record_id:
             raise RuntimeError('表格顺序已变化，请重新发送原链接获取新审核卡。')
+        if not action.get('script_hash'):
+            raise RuntimeError('这张审核卡版本过旧，请重新发送编号。')
+        if action['script_hash'] != script_digest(record['script']):
+            raise RuntimeError('口播稿在审核后被修改过，请重新发送编号，核对最新文案。')
+        record_approval(record_id, script_digest(record['script']))
         client.request('PUT', client.base + '/records/' + record_id,
                        json={'fields': {'生成状态': '文案已确认'}})
-        send_leo_picker(chat_id, number, **_on(action.get('message_id', '')))
+        send_leo_picker(chat_id, number, script_hash=script_digest(record['script']),
+                        **_on(action.get('message_id', '')))
     except Exception as exc:
         logger.exception('Rewrite approval failed')
         show_blocked(chat_id, action.get('message_id', ''), number, 'avatar_b', str(exc),
@@ -313,22 +307,24 @@ def route_leo_selection(chat_id, number, message_id=''):
         source = avatar_source('avatar_b')
         record = script_record(Feishu(table_id=source['table_id']), number,
                                source['view_id'], source['library'])
-        if record['status'] not in {'文案已确认', '失败', '生成中', '已生成'}:
+        approved = (record['status'] in {'文案已确认', '失败'}
+                    and approved_digest(record['record_id']) == script_digest(record['script']))
+        if record['status'] not in {'生成中', '已生成'} and not approved:
             send_rewrite_review(chat_id, number, record['record_id'], **_on(message_id))
             if not message_id:
                 send_text(chat_id, (
                     f'编号 {number} 的文案已经存在，目前等待人工确认。'
-                    '请检查表格中的「改写一」；确认后才会进入数字人生成。\n' + TABLE_URL
+                    '请核对审核卡里的口播稿；确认后才会进入数字人生成。\n' + TABLE_URL
                 ))
             return
-        send_leo_picker(chat_id, number, **_on(message_id))
+        send_leo_picker(chat_id, number, script_hash=script_digest(record['script']), **_on(message_id))
     except Exception as exc:
         logger.exception('Failed to route LEO script selection')
         show_blocked(chat_id, message_id, number, 'avatar_b', str(exc),
                      f'编号 {number} 无法进入下一步：{exc}', step=0)
 
 
-def send_leo_picker(chat_id, number, message_id=''):
+def send_leo_picker(chat_id, number, message_id='', script_hash=''):
     try:
         available = []
         unavailable = []
@@ -343,7 +339,7 @@ def send_leo_picker(chat_id, number, message_id=''):
                          '当前没有通过安全校验的 LEO 数字人，任务未提交。',
                          '当前没有通过安全校验的 LEO 数字人，任务未提交。', step=2)
             return
-        show_card(chat_id, message_id, leo_avatar_card(number, available, unavailable))
+        show_card(chat_id, message_id, leo_avatar_card(number, available, unavailable, script_hash))
     except Exception as exc:
         logger.exception('Failed to validate LEO avatars')
         show_blocked(chat_id, message_id, number, 'avatar_b',
@@ -369,7 +365,7 @@ def run_avatar_selection(chat_id, action):
             send_text(chat_id, f'已选择{result["avatar_label"]}，视频开始生成。完成后会回填到原表格。')
     except Exception as exc:
         logger.exception('Avatar video submission failed')
-        reason = safe_failure_reason(exc)
+        reason = str(exc) if isinstance(exc, ScriptChangedError) else safe_failure_reason(exc)
         safely_update_card(
             action.get('message_id', ''),
             rejected_card(action['script_number'], action['avatar_key'], reason)
@@ -385,6 +381,8 @@ def send_avatar_confirmation(chat_id, action):
                                action['script_number'], source['view_id'],
                                source['library'])
         message_id = action.get('message_id', '')
+        if action.get('script_hash') and action['script_hash'] != script_digest(record['script']):
+            raise RuntimeError('口播稿在确认之后被修改过，请重新发送编号，核对最新文案。')
         if record['status'] in {'生成中', '已生成'}:
             duplicate = f'脚本 {action["script_number"]} 当前状态是“{record["status"]}”，不会重复提交。'
             if message_id:
@@ -393,6 +391,11 @@ def send_avatar_confirmation(chat_id, action):
             else:
                 send_text(chat_id, duplicate)
             return
+        if str(action['avatar_key']).startswith('leo_avatar_'):
+            if approved_digest(record['record_id']) != script_digest(record['script']):
+                raise RuntimeError('这份口播稿的当前版本还没有被人工确认，请重新发送编号审核。')
+        else:
+            send_script_parts(chat_id, action['script_number'], record['script'])
         show_card(chat_id, message_id, confirmation_card(record, action['avatar_key']))
     except Exception as exc:
         logger.exception('Failed to prepare generation confirmation')

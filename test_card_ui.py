@@ -109,16 +109,17 @@ class ButtonsAreUnchangedTests(unittest.TestCase):
                                 'avatar_key': f'leo_avatar_{n}'} for n in (1, 2, 3)])
 
     def test_review_payloads(self):
-        got = [b['value'] for b in actions(flow.rewrite_review_card(11, 'rec_11', 't'))]
+        got = [b['value'] for b in actions(flow.rewrite_review_card(11, 'rec_11', 't', '口播稿'))]
         self.assertEqual(got, [
-            {'action': 'approve_rewrite', 'script_number': 11, 'record_id': 'rec_11'},
-            {'action': 'redo_rewrite', 'script_number': 11, 'record_id': 'rec_11'},
+            {'action': 'approve_rewrite', 'script_number': 11, 'record_id': 'rec_11',
+             'script_hash': flow.script_digest('口播稿')},
         ])
 
     def test_confirmation_payloads(self):
         got = [b['value'] for b in actions(flow.confirmation_card(RECORD, 'avatar_libby'))]
         self.assertEqual(got, [
-            {'action': 'generate_avatar_video', 'script_number': 11, 'avatar_key': 'avatar_libby'},
+            {'action': 'generate_avatar_video', 'script_number': 11, 'avatar_key': 'avatar_libby',
+             'script_hash': flow.script_digest('测' * 336)},
             {'action': 'cancel_avatar_video', 'script_number': 11, 'avatar_key': 'avatar_libby'},
         ])
 
@@ -197,6 +198,7 @@ class FlowUsesTheClickedCardTests(unittest.TestCase):
                 patch.object(feishu_bot, 'Feishu', MagicMock()), \
                 patch.object(feishu_bot, 'script_record', return_value=record), \
                 patch.object(feishu_bot, 'validate_avatar_binding'), \
+                patch.object(feishu_bot, 'approved_digest', return_value=flow.script_digest('s')), \
                 patch.object(feishu_bot, 'update_card') as update, \
                 patch.object(feishu_bot, 'send_card') as send, \
                 patch.object(feishu_bot, 'send_text') as text, \
@@ -233,7 +235,7 @@ class FlowUsesTheClickedCardTests(unittest.TestCase):
         # "确认文案" click look like a repeated click, so redo must send a NEW card.
         client = MagicMock()
         client.base = '/x'
-        client.request.return_value = {'data': {'record': {'fields': {'改写一': '文案', '标题': '标题'}}}}
+        client.request.return_value = {'data': {'record': {'fields': {'口播稿': '文案', '标题': '标题'}}}}
         with patch.object(feishu_bot, 'Feishu', return_value=client), \
                 patch.object(feishu_bot, 'update_card') as update, \
                 patch.object(feishu_bot, 'send_card') as send:

@@ -130,9 +130,9 @@ class SafetyAfterSelectionTests(unittest.IsolatedAsyncioTestCase):
     def test_empty_script_is_explained_after_selection(self):
         card, text = self.confirm(
             validate_avatar_binding=MagicMock(),
-            script_record=MagicMock(side_effect=RuntimeError('脚本 11 的“改写一”是空的，任务没有提交。')))
+            script_record=MagicMock(side_effect=RuntimeError('脚本 11 的“口播稿”是空的，任务没有提交。')))
         card.assert_not_called()
-        self.assertIn('“改写一”是空的', text.call_args.args[1])
+        self.assertIn('“口播稿”是空的', text.call_args.args[1])
 
     def test_avatar_safety_check_still_runs_before_any_table_read(self):
         lookup = MagicMock()

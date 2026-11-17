@@ -3,6 +3,7 @@
 The bot owns selection and idempotency.  Rendering is delegated to one internal
 service so a Feishu button click can never turn into an unbounded retry loop.
 """
+import hashlib
 import json
 import os
 import re
@@ -132,9 +133,88 @@ def records_in_view(client, view_id=''):
         params['page_token'] = token
 
 
+class ScriptChangedError(RuntimeError):
+    """The script text is missing, or differs from what the user reviewed and approved."""
+
+
 def generation_script(fields):
-    """Video commands always use the finalized first rewrite, never the source script."""
-    return text_value((fields or {}).get('改写一')).strip()
+    """The script for review and video is the 口播稿 column. 改写一/改写二 are optional extras."""
+    return text_value((fields or {}).get('口播稿')).strip()
+
+
+def script_digest(script):
+    """Short fingerprint that ties a card to the exact text the user saw."""
+    return hashlib.sha256((script or '').strip().encode('utf-8')).hexdigest()[:16]
+
+
+_MARKDOWN_SAFE = str.maketrans({'<': '＜', '>': '＞', '`': 'ˋ', '*': '＊', '_': '＿',
+                                '[': '［', ']': '］', '~': '～'})
+
+
+FULL_ON_CARD = 800     # up to this many characters the whole script is shown on the card
+PART_SIZE = 1500       # longer scripts are sent in full as plain-text messages of this size
+
+
+def script_parts(script):
+    """Split the script into consecutive pieces; ''.join(parts) == script.strip() exactly."""
+    text = (script or '').strip()
+    parts = []
+    while text:
+        if len(text) <= PART_SIZE:
+            parts.append(text)
+            break
+        window = text[:PART_SIZE]
+        cut = max(window.rfind('\n'), window.rfind('。'), window.rfind('！'), window.rfind('？'))
+        cut = cut + 1 if cut >= PART_SIZE // 2 else PART_SIZE
+        parts.append(text[:cut])
+        text = text[cut:]
+    return parts
+
+
+def script_preview(script):
+    """What the card says about the script. Short scripts are shown completely (markup
+    characters swapped for look-alikes so they cannot render as formatting or @mentions).
+    Long scripts are never cut: the card says the full text was sent as separate messages."""
+    text = (script or '').strip()
+    if len(text) <= FULL_ON_CARD:
+        return text.translate(_MARKDOWN_SAFE)
+    return (f'共 {len(text)} 字，太长，不在卡片内显示。全文已分 {len(script_parts(text))} 条消息'
+            '发送在聊天记录里，请逐条核对完整文案。')
+
+
+def _approval_path():
+    return os.path.join(os.getenv('STATE_DIR', '/data'), 'approved_scripts.json')
+
+
+_approval_lock = threading.Lock()
+
+
+def approved_digest(record_id):
+    """Digest of the 口播稿 a human approved for this record ('' if never approved)."""
+    try:
+        with open(_approval_path(), encoding='utf-8') as handle:
+            return str(json.load(handle).get(record_id, ''))
+    except (OSError, ValueError, AttributeError):
+        return ''
+
+
+def record_approval(record_id, digest):
+    """Persist the approval BEFORE the table status changes. A later edit changes the
+    digest, so the old approval silently stops applying."""
+    with _approval_lock:
+        try:
+            with open(_approval_path(), encoding='utf-8') as handle:
+                data = json.load(handle)
+            if not isinstance(data, dict):
+                data = {}
+        except (OSError, ValueError):
+            data = {}
+        data[record_id] = digest
+        os.makedirs(os.path.dirname(_approval_path()), exist_ok=True)
+        temporary = _approval_path() + '.tmp'
+        with open(temporary, 'w', encoding='utf-8') as handle:
+            json.dump(data, handle, ensure_ascii=False)
+        os.replace(temporary, _approval_path())
 
 
 def estimate_video_cost(script):
@@ -156,12 +236,13 @@ def script_record(client, number, view_id='', library=''):
     fields = record.get('fields', {})
     script = generation_script(fields)
     if not script:
-        raise RuntimeError(f'脚本 {number} 的“改写一”是空的，任务没有提交。')
+        raise ScriptChangedError(f'脚本 {number} 的“口播稿”是空的，任务没有提交。')
     return {
         'record_id': record['record_id'],
         'number': number,
         'title': text_value(fields.get('标题')).strip() or f'脚本 {number}',
         'script': script,
+        'script_hash': script_digest(script),
         'status': text_value(fields.get('生成状态')).strip(),
     }
 
@@ -229,7 +310,7 @@ def _progress_and_step(kind, leo, blocked_step=0):
 
 
 def _workflow_card(number, kind, template, stage, main, *, avatar_key=None,
-                   buttons=None, facts=None, warn='', note='', blocked_step=0):
+                   buttons=None, facts=None, warn='', note='', blocked_step=0, extra=''):
     leo = _is_leo(avatar_key)
     progress, step = _progress_and_step(kind, leo, blocked_step)
     total = 4
@@ -243,6 +324,8 @@ def _workflow_card(number, kind, template, stage, main, *, avatar_key=None,
         {'tag': 'markdown', 'content': f"<font color='grey'>第 {position} 步 / 共 {total} 步 ｜ {stage}</font>"},
         {'tag': 'markdown', 'content': main},
     ]
+    if extra:
+        elements.append({'tag': 'markdown', 'content': extra})
     if facts:
         elements.append({'tag': 'markdown', 'content': '\n'.join(f'**{name}**：{value}' for name, value in facts)})
     if warn:
@@ -277,16 +360,17 @@ def avatar_card(number, choices=None, unavailable=None):
     return _workflow_card(
         number, 'pick', 'blue', '选脚本库',
         f'请选择编号 **{number}** 属于哪一个脚本库。机器人只会从所选表格读取'
-        '同编号的“改写一”，不会混用其他表格。',
+        '同编号的“口播稿”，不会混用其他表格。',
         buttons=buttons, note=note)
 
 
-def leo_avatar_card(number, choices=None, unavailable=None):
+def leo_avatar_card(number, choices=None, unavailable=None, script_hash=''):
     choices = leo_avatar_choices() if choices is None else choices
     buttons = [_button(item['label'], 'default', {
         'action': 'select_leo_avatar',
         'script_number': number,
         'avatar_key': item['key'],
+        **({'script_hash': script_hash} if script_hash else {}),
     }) for item in choices]
     note = '只会使用你选的这个形象，不会自动更换。'
     if unavailable:
@@ -297,25 +381,22 @@ def leo_avatar_card(number, choices=None, unavailable=None):
         avatar_key='avatar_b', buttons=buttons, note=note)
 
 
-def rewrite_review_card(number, record_id, title=''):
-    """Ask a human to approve the table's current rewrite before video steps."""
+def rewrite_review_card(number, record_id, title='', script=''):
+    """Ask a human to approve the 口播稿 shown here before any video step."""
     heading = (title or f'脚本 {number}').strip()
     return _workflow_card(
         number, 'review', 'orange', '人工审核文案',
-        f'**{heading}**\n请先在飞书表格检查或修改「改写一」。'
-        '文案没问题再点「确认文案，下一步」；质量不合格可点「重新改写」。',
+        f'**{heading}**\n请核对下面的口播稿。视频将使用这份文案；要修改请先改飞书表格的「口播稿」，'
+        '改完重新发送编号。',
         avatar_key='avatar_b',
+        extra='**口播稿**\n' + script_preview(script),
         note='未经人工确认，不会提交 HeyGen，也不会产生任何费用。',
         buttons=[
             _button('确认文案，下一步', 'primary', {
                 'action': 'approve_rewrite',
                 'script_number': number,
                 'record_id': record_id,
-            }),
-            _button('重新改写', 'default', {
-                'action': 'redo_rewrite',
-                'script_number': number,
-                'record_id': record_id,
+                'script_hash': script_digest(script),
             }),
         ])
 
@@ -367,6 +448,7 @@ def confirmation_card(record, avatar_key):
         record['number'], 'confirm', 'orange', '确认生成',
         f'**{record["title"]}**',
         avatar_key=avatar_key,
+        extra='**将用于生成视频的口播稿**\n' + script_preview(record['script']),
         facts=[('脚本库', library), ('数字人', presenter),
                ('预计时长', f'约 {duration}'), ('预计 API 成本', f'约 ${estimate["dollars"]:.2f}')],
         warn='点「确认生成」会向视频平台提交一次付费任务，确认后只提交一次，不会自动重跑。',
@@ -376,6 +458,7 @@ def confirmation_card(record, avatar_key):
                 'action': 'generate_avatar_video',
                 'script_number': record['number'],
                 'avatar_key': avatar_key,
+                'script_hash': script_digest(record['script']),
             }),
             _button('取消生成', 'default', {
                 'action': 'cancel_avatar_video',
@@ -451,6 +534,7 @@ def parse_card_action(payload):
         'script_number': int(value.get('script_number') or 0),
         'record_id': str(value.get('record_id', '')).strip(),
         'avatar_key': str(value.get('avatar_key', '')).strip(),
+        'script_hash': str(value.get('script_hash', '')).strip(),
         'chat_id': (context.get('open_chat_id') or event.get('open_chat_id') or
                     payload.get('open_chat_id') or ''),
         'message_id': (context.get('open_message_id') or
@@ -503,10 +587,19 @@ def submit_video_job(client, action):
             return {'duplicate': True, 'status': status or '已生成'}
         script = generation_script(fields)
         if not script:
-            raise RuntimeError('这条记录的“改写一”为空，任务没有提交。')
+            raise ScriptChangedError('这条记录的“口播稿”为空，任务没有提交。')
+        expected = (action.get('script_hash') or '').strip()
+        if not expected:
+            raise ScriptChangedError('这张确认卡版本过旧，缺少文案校验，任务没有提交。请重新发送编号。')
+        if expected != script_digest(script):
+            raise ScriptChangedError('口播稿在你确认之后被修改过，任务没有提交。请重新发送编号确认最新文案。')
         if action['avatar_key'].startswith('leo_avatar_') and status not in {
                 '文案已确认', '失败'}:
             raise RuntimeError('文案尚未人工确认，任务没有提交。')
+        if action['avatar_key'].startswith('leo_avatar_') and \
+                approved_digest(record_id) != script_digest(script):
+            raise ScriptChangedError('这份口播稿的当前版本还没有被人工确认（可能确认后被修改），'
+                                     '任务没有提交。请重新发送编号审核。')
 
         # Mark first.  There is deliberately no automatic retry if the remote
         # result is ambiguous; a human may explicitly submit again after failure.
