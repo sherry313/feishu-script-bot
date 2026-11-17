@@ -27,6 +27,7 @@ from avatar_video_workflow import (apply_job_callback, avatar_card, confirmation
                                    parse_card_action, parse_plain_script_number,
                                    parse_script_number,
                                    rejected_card, script_record, submitted_card,
+                                   blocked_card, cancelled_card, notice_card,
                                    submit_video_job, validating_card)
 from heygen_video_service import accept_job, unfinished_jobs, wait_and_callback
 from heygen_video_service import safe_failure_reason, validate_avatar_binding
@@ -193,7 +194,39 @@ def safely_update_card(message_id, card):
         logger.exception('Failed to replace clicked Feishu card: message_id=%s', message_id)
 
 
-def send_rewrite_review(chat_id, number, record_id):
+def _on(message_id):
+    """Keyword for 'show this step on the clicked card'; empty means send a new card."""
+    return {'message_id': message_id} if message_id else {}
+
+
+def show_card(chat_id, message_id, card):
+    """Show the next step on the card the user just clicked.
+
+    If the in-place update fails (old card, expired card, API error) a new card is
+    sent instead, so the user is never left on a card without buttons.
+    """
+    if message_id:
+        try:
+            update_card(message_id, card)
+            return
+        except Exception:
+            logger.exception('In-place card update failed; sending a new card: message_id=%s',
+                             message_id)
+    send_card(chat_id, card)
+
+
+def show_blocked(chat_id, message_id, number, avatar_key, reason, text, step=0):
+    """Explain why the flow cannot continue: on the card when there is one, else as text."""
+    if message_id:
+        try:
+            show_card(chat_id, message_id, blocked_card(number, avatar_key, reason, step))
+            return
+        except Exception:
+            logger.exception('Could not show the blocked card; falling back to text')
+    send_text(chat_id, text)
+
+
+def send_rewrite_review(chat_id, number, record_id, message_id=''):
     """Send the human quality gate after rereading the current Feishu record."""
     client = Feishu(table_id=os.getenv('LEO_TABLE_ID') or os.getenv('FEISHU_TABLE_ID', ''))
     body = client.request('GET', client.base + '/records/' + record_id)
@@ -201,7 +234,7 @@ def send_rewrite_review(chat_id, number, record_id):
     if not text_value(fields.get('改写一')).strip():
         raise RuntimeError(f'编号 {number} 的「改写一」仍为空，无法进入人工审核。')
     title = text_value(fields.get('改写标题')).strip() or text_value(fields.get('标题')).strip()
-    send_card(chat_id, rewrite_review_card(number, record_id, title))
+    show_card(chat_id, message_id, rewrite_review_card(number, record_id, title))
 
 
 def redo_rewrite(chat_id, action):
@@ -253,10 +286,11 @@ def approve_rewrite(chat_id, action):
             raise RuntimeError('表格顺序已变化，请重新发送原链接获取新审核卡。')
         client.request('PUT', client.base + '/records/' + record_id,
                        json={'fields': {'生成状态': '文案已确认'}})
-        send_leo_picker(chat_id, number)
+        send_leo_picker(chat_id, number, **_on(action.get('message_id', '')))
     except Exception as exc:
         logger.exception('Rewrite approval failed')
-        send_text(chat_id, f'编号 {number} 文案确认失败，未进入 HeyGen：{exc}')
+        show_blocked(chat_id, action.get('message_id', ''), number, 'avatar_b', str(exc),
+                     f'编号 {number} 文案确认失败，未进入 HeyGen：{exc}', step=1)
 
 
 def send_avatar_picker(chat_id, number):
@@ -273,26 +307,28 @@ def send_avatar_picker(chat_id, number):
         send_text(chat_id, str(exc))
 
 
-def route_leo_selection(chat_id, number):
+def route_leo_selection(chat_id, number, message_id=''):
     """Resume a pending LEO script at review; only approved scripts reach avatars."""
     try:
         source = avatar_source('avatar_b')
         record = script_record(Feishu(table_id=source['table_id']), number,
                                source['view_id'], source['library'])
         if record['status'] not in {'文案已确认', '失败', '生成中', '已生成'}:
-            send_rewrite_review(chat_id, number, record['record_id'])
-            send_text(chat_id, (
-                f'编号 {number} 的文案已经存在，目前等待人工确认。'
-                '请检查表格中的「改写一」；确认后才会进入数字人生成。\n' + TABLE_URL
-            ))
+            send_rewrite_review(chat_id, number, record['record_id'], **_on(message_id))
+            if not message_id:
+                send_text(chat_id, (
+                    f'编号 {number} 的文案已经存在，目前等待人工确认。'
+                    '请检查表格中的「改写一」；确认后才会进入数字人生成。\n' + TABLE_URL
+                ))
             return
-        send_leo_picker(chat_id, number)
+        send_leo_picker(chat_id, number, **_on(message_id))
     except Exception as exc:
         logger.exception('Failed to route LEO script selection')
-        send_text(chat_id, f'编号 {number} 无法进入下一步：{exc}')
+        show_blocked(chat_id, message_id, number, 'avatar_b', str(exc),
+                     f'编号 {number} 无法进入下一步：{exc}', step=0)
 
 
-def send_leo_picker(chat_id, number):
+def send_leo_picker(chat_id, number, message_id=''):
     try:
         available = []
         unavailable = []
@@ -303,12 +339,16 @@ def send_leo_picker(chat_id, number):
             except Exception as exc:
                 unavailable.append(f'{choice["label"]}（{exc}）')
         if not available:
-            send_text(chat_id, '当前没有通过安全校验的 LEO 数字人，任务未提交。')
+            show_blocked(chat_id, message_id, number, 'avatar_b',
+                         '当前没有通过安全校验的 LEO 数字人，任务未提交。',
+                         '当前没有通过安全校验的 LEO 数字人，任务未提交。', step=2)
             return
-        send_card(chat_id, leo_avatar_card(number, available, unavailable))
+        show_card(chat_id, message_id, leo_avatar_card(number, available, unavailable))
     except Exception as exc:
         logger.exception('Failed to validate LEO avatars')
-        send_text(chat_id, '数字人安全校验暂时无法完成，任务未提交，不会扣费。' + str(exc))
+        show_blocked(chat_id, message_id, number, 'avatar_b',
+                     '数字人安全校验暂时无法完成，任务未提交，不会扣费。' + str(exc),
+                     '数字人安全校验暂时无法完成，任务未提交，不会扣费。' + str(exc), step=2)
 
 
 def run_avatar_selection(chat_id, action):
@@ -344,13 +384,21 @@ def send_avatar_confirmation(chat_id, action):
         record = script_record(Feishu(table_id=source['table_id']),
                                action['script_number'], source['view_id'],
                                source['library'])
+        message_id = action.get('message_id', '')
         if record['status'] in {'生成中', '已生成'}:
-            send_text(chat_id, f'脚本 {action["script_number"]} 当前状态是“{record["status"]}”，不会重复提交。')
+            duplicate = f'脚本 {action["script_number"]} 当前状态是“{record["status"]}”，不会重复提交。'
+            if message_id:
+                show_card(chat_id, message_id, notice_card(
+                    action['script_number'], action['avatar_key'], duplicate))
+            else:
+                send_text(chat_id, duplicate)
             return
-        send_card(chat_id, confirmation_card(record, action['avatar_key']))
+        show_card(chat_id, message_id, confirmation_card(record, action['avatar_key']))
     except Exception as exc:
         logger.exception('Failed to prepare generation confirmation')
-        send_text(chat_id, str(exc))
+        show_blocked(chat_id, action.get('message_id', ''), action.get('script_number', 0),
+                     action.get('avatar_key'), str(exc), str(exc),
+                     step=3 if action.get('action') == 'select_leo_avatar' else 0)
 
 
 def status_text():
@@ -493,7 +541,8 @@ async def feishu_events(request: Request, background_tasks: BackgroundTasks):
                     )
                     if action['avatar_key'] == 'avatar_b':
                         background_tasks.add_task(
-                            route_leo_selection, chat_id, action['script_number']
+                            route_leo_selection, chat_id, action['script_number'],
+                            message_id=action.get('message_id', '')
                         )
                         return {}
                     background_tasks.add_task(send_avatar_confirmation, chat_id, action)
@@ -506,6 +555,11 @@ async def feishu_events(request: Request, background_tasks: BackgroundTasks):
                     background_tasks.add_task(send_avatar_confirmation, chat_id, action)
                     return {}
                 if action['action'] == 'cancel_avatar_video':
+                    if action.get('message_id'):
+                        background_tasks.add_task(
+                            safely_update_card, action['message_id'],
+                            cancelled_card(action['script_number'], action['avatar_key'])
+                        )
                     background_tasks.add_task(
                         send_text, chat_id,
                         f'已取消脚本 {action["script_number"]}，任务没有提交，不会扣费。',

@@ -166,170 +166,189 @@ def script_record(client, number, view_id='', library=''):
     }
 
 
-def avatar_card(number, choices=None, unavailable=None):
-    choices = avatar_choices() if choices is None else choices
-    buttons = []
-    for choice in choices:
-        buttons.append({
-            'tag': 'button',
-            'text': {'tag': 'plain_text', 'content': choice['label']},
-            'type': 'primary',
-            'value': {
-                'action': 'select_avatar_script',
-                'script_number': number,
-                'avatar_key': choice['key'],
-            },
-        })
+# ---------------------------------------------------------------------------
+# Card layout. Every card in the workflow uses the same frame:
+#   fixed header "口播脚本 · 编号 N"  ->  progress line  ->  step text  ->  buttons last.
+# Only the look changed. Button `value` payloads, action names and the dedupe
+# stages in feishu_bot are exactly what they were, so cards already sent keep working.
+# ---------------------------------------------------------------------------
+_STEP_NAMES = ('脚本库', '审核文案', '数字人', '确认生成')
+_GLYPH = {'done': '✅', 'cur': '🔵', 'todo': '⚪', 'na': '➖', 'wait': '⏳', 'bad': '❌', 'stop': '⛔'}
+# Marks for the four LEO steps: library, review, avatar, confirm.
+_MARKS = {
+    'pick': ('cur', 'todo', 'todo', 'todo'),
+    'check': ('wait', 'todo', 'todo', 'todo'),
+    'review': ('done', 'cur', 'todo', 'todo'),
+    'redo': ('done', 'wait', 'todo', 'todo'),
+    'approved': ('done', 'done', 'wait', 'todo'),
+    'avatar': ('done', 'done', 'cur', 'todo'),
+    'avatar_locked': ('done', 'done', 'done', 'wait'),
+    'confirm': ('done', 'done', 'done', 'cur'),
+    'validating': ('done', 'done', 'done', 'wait'),
+    'rejected': ('done', 'done', 'done', 'bad'),
+    'submitted': ('done', 'done', 'done', 'wait'),
+    'cancelled': ('done', 'done', 'done', 'stop'),
+    'notice': ('done', 'done', 'done', 'cur'),
+}
+# Which of the four steps each kind of card belongs to (for "第 N 步").
+_STEP_OF = {'pick': 0, 'check': 0, 'review': 1, 'redo': 1, 'approved': 2, 'avatar': 2,
+            'avatar_locked': 3, 'confirm': 3, 'validating': 3, 'rejected': 3,
+            'submitted': 3, 'cancelled': 3, 'notice': 3}
+
+
+def _is_leo(avatar_key):
+    key = str(avatar_key or '')
+    return key in ('', 'avatar_b') or key.startswith('leo_avatar_')
+
+
+def _button(text, kind, value):
+    return {'tag': 'button', 'text': {'tag': 'plain_text', 'content': text},
+            'type': kind, 'value': value}
+
+
+def _progress_and_step(kind, leo, blocked_step=0):
+    if kind == 'blocked':
+        marks = ['done'] * blocked_step + ['bad'] + ['todo'] * (3 - blocked_step)
+        step = blocked_step
+    else:
+        marks = list(_MARKS[kind])
+        step = _STEP_OF[kind]
+    if not leo:
+        # Libby / 陈总 have no review step and no avatar step in this bot.
+        marks[1] = 'na'
+        marks[2] = 'na'
+    labels = list(_STEP_NAMES)
+    if not leo:
+        labels[1] = '审核（本库无此步）'
+        labels[2] = '数字人（本库无此步）'
+    parts = []
+    for index, mark in enumerate(marks):
+        text = f'{index + 1} {labels[index]}'
+        parts.append(f'{_GLYPH[mark]} ' + (f'**{text}**' if mark in ('cur', 'wait', 'bad', 'stop') else text))
+    return '　'.join(parts), step
+
+
+def _workflow_card(number, kind, template, stage, main, *, avatar_key=None,
+                   buttons=None, facts=None, warn='', note='', blocked_step=0):
+    leo = _is_leo(avatar_key)
+    progress, step = _progress_and_step(kind, leo, blocked_step)
+    total = 4
+    position = step + 1
+    if not leo:
+        total = 2
+        position = 1 if step == 0 else 2
     elements = [
-        {'tag': 'markdown', 'content': (
-            f'请选择编号 **{number}** 属于哪一个脚本库。机器人只会从所选表格读取'
-            '同编号的“改写一”，确认文案和预计成本后再生成，不会混用其他表格。'
-        )},
+        {'tag': 'markdown', 'content': progress},
+        {'tag': 'hr'},
+        {'tag': 'markdown', 'content': f"<font color='grey'>第 {position} 步 / 共 {total} 步 ｜ {stage}</font>"},
+        {'tag': 'markdown', 'content': main},
     ]
+    if facts:
+        elements.append({'tag': 'markdown', 'content': '\n'.join(f'**{name}**：{value}' for name, value in facts)})
+    if warn:
+        elements.append({'tag': 'markdown', 'content': f'⚠️ {warn}'})
+    if note:
+        elements.append({'tag': 'note', 'elements': [{'tag': 'plain_text', 'content': note}]})
     if buttons:
+        elements.append({'tag': 'hr'})
         elements.append({'tag': 'action', 'actions': buttons})
-    if unavailable:
-        elements.append({'tag': 'note', 'elements': [{
-            'tag': 'plain_text', 'content': '已自动隐藏不可用脚本库：' + '；'.join(unavailable)
-        }]})
     return {
-        'config': {'wide_screen_mode': True},
+        'config': {'wide_screen_mode': True, 'update_multi': True},
         'header': {
-            'template': 'blue',
-            'title': {'tag': 'plain_text', 'content': f'编号 {number}｜选择脚本库'},
+            'template': template,
+            'title': {'tag': 'plain_text', 'content': f'口播脚本 · 编号 {number}'},
         },
         'elements': elements,
     }
+
+
+def avatar_card(number, choices=None, unavailable=None):
+    choices = avatar_choices() if choices is None else choices
+    buttons = [_button(choice['label'], 'default', {
+        'action': 'select_avatar_script',
+        'script_number': number,
+        'avatar_key': choice['key'],
+    }) for choice in choices]
+    note = '找不到脚本会在你选择之后告诉你原因。'
+    if len(choices) == 3:
+        note = '三个脚本库都会显示；' + note
+    if unavailable:
+        note = '已自动隐藏不可用脚本库：' + '；'.join(unavailable)
+    return _workflow_card(
+        number, 'pick', 'blue', '选脚本库',
+        f'请选择编号 **{number}** 属于哪一个脚本库。机器人只会从所选表格读取'
+        '同编号的“改写一”，不会混用其他表格。',
+        buttons=buttons, note=note)
 
 
 def leo_avatar_card(number, choices=None, unavailable=None):
     choices = leo_avatar_choices() if choices is None else choices
-    buttons = [{
-        'tag': 'button',
-        'text': {'tag': 'plain_text', 'content': item['label']},
-        'type': 'primary',
-        'value': {
-            'action': 'select_leo_avatar',
-            'script_number': number,
-            'avatar_key': item['key'],
-        },
-    } for item in choices]
-    elements = [
-        {'tag': 'markdown', 'content': '请选择本次视频使用的数字人形象。'},
-    ]
-    if buttons:
-        elements.append({'tag': 'action', 'actions': buttons})
+    buttons = [_button(item['label'], 'default', {
+        'action': 'select_leo_avatar',
+        'script_number': number,
+        'avatar_key': item['key'],
+    }) for item in choices]
+    note = '只会使用你选的这个形象，不会自动更换。'
     if unavailable:
-        elements.append({'tag': 'note', 'elements': [{
-            'tag': 'plain_text', 'content': '已自动隐藏不可用数字人：' + '；'.join(unavailable)
-        }]})
-    return {
-        'config': {'wide_screen_mode': True},
-        'header': {
-            'template': 'blue',
-            'title': {'tag': 'plain_text', 'content': f'LEO脚本 {number}｜选择数字人'},
-        },
-        'elements': elements,
-    }
+        note = '已自动隐藏不可用数字人：' + '；'.join(unavailable)
+    return _workflow_card(
+        number, 'avatar', 'blue', '选数字人',
+        '文案已确认。请选择本次视频使用的数字人形象。',
+        avatar_key='avatar_b', buttons=buttons, note=note)
 
 
 def rewrite_review_card(number, record_id, title=''):
     """Ask a human to approve the table's current rewrite before video steps."""
     heading = (title or f'脚本 {number}').strip()
-    return {
-        'config': {'wide_screen_mode': True},
-        'header': {
-            'template': 'orange',
-            'title': {'tag': 'plain_text', 'content': f'编号 {number}｜人工审核文案'},
-        },
-        'elements': [
-            {'tag': 'markdown', 'content': (
-                f'**{heading}**\n\n'
-                '请先在飞书表格检查或修改「改写一」。\n'
-                '文案没问题后点「确认文案，下一步」；质量不合格可点「重新改写」。\n\n'
-                '**未经人工确认，不会提交 HeyGen。**'
-            )},
-            {'tag': 'action', 'actions': [
-                {
-                    'tag': 'button',
-                    'text': {'tag': 'plain_text', 'content': '确认文案，下一步'},
-                    'type': 'primary',
-                    'value': {
-                        'action': 'approve_rewrite',
-                        'script_number': number,
-                        'record_id': record_id,
-                    },
-                },
-                {
-                    'tag': 'button',
-                    'text': {'tag': 'plain_text', 'content': '重新改写'},
-                    'type': 'default',
-                    'value': {
-                        'action': 'redo_rewrite',
-                        'script_number': number,
-                        'record_id': record_id,
-                    },
-                },
-            ]},
-        ],
-    }
+    return _workflow_card(
+        number, 'review', 'orange', '人工审核文案',
+        f'**{heading}**\n请先在飞书表格检查或修改「改写一」。'
+        '文案没问题再点「确认文案，下一步」；质量不合格可点「重新改写」。',
+        avatar_key='avatar_b',
+        note='未经人工确认，不会提交 HeyGen，也不会产生任何费用。',
+        buttons=[
+            _button('确认文案，下一步', 'primary', {
+                'action': 'approve_rewrite',
+                'script_number': number,
+                'record_id': record_id,
+            }),
+            _button('重新改写', 'default', {
+                'action': 'redo_rewrite',
+                'script_number': number,
+                'record_id': record_id,
+            }),
+        ])
 
 
 def locked_rewrite_review_card(number, approved):
     """Replace a review card after either human decision; no buttons remain."""
     if approved:
-        title = f'编号 {number}｜文案已确认'
-        content = '文案审核已锁定。下一步请选择数字人形象。'
-        template = 'green'
-    else:
-        title = f'编号 {number}｜正在重新改写'
-        content = '正在基于原始转写重新生成文案；本卡片已锁定，请等待新的审核卡片。'
-        template = 'orange'
-    return {
-        'config': {'wide_screen_mode': True, 'update_multi': True},
-        'header': {
-            'template': template,
-            'title': {'tag': 'plain_text', 'content': title},
-        },
-        'elements': [{'tag': 'markdown', 'content': content}],
-    }
+        return _workflow_card(
+            number, 'approved', 'blue', '文案已确认',
+            '文案已确认，审核已锁定。正在准备数字人选项……',
+            avatar_key='avatar_b', note='请不用重复点击。')
+    return _workflow_card(
+        number, 'redo', 'orange', '正在重新改写',
+        '正在基于原始转写重新生成文案，完成后会发一张新的审核卡，请稍等。',
+        avatar_key='avatar_b', note='本卡片已锁定，不用重复点击。')
 
 
 def locked_script_card(number, avatar_key):
     """Replace the script-library picker after one option is selected."""
     label = avatar_label(avatar_key) or '所选脚本库'
-    next_step = ('下一步审核文案；审核通过后再选择数字人形象。' if avatar_key == 'avatar_b'
-                 else '下一步请确认文案和预计成本。')
-    return {
-        'config': {'wide_screen_mode': True, 'update_multi': True},
-        'header': {
-            'template': 'green',
-            'title': {'tag': 'plain_text', 'content': f'编号 {number}｜已选择 {label}'},
-        },
-        'elements': [
-            {'tag': 'markdown', 'content': (
-                f'已选择 **{label}**，脚本库选项已锁定，不能重复选择。\n\n{next_step}'
-            )},
-        ],
-    }
+    return _workflow_card(
+        number, 'check', 'blue', f'已选择 {label}',
+        f'已选择 {label}，脚本库选项已锁定。正在读取第 {number} 条脚本并做安全检查……',
+        avatar_key=avatar_key, note='请不用重复点击。')
 
 
 def locked_leo_avatar_card(number, avatar_key):
     """Replace the LEO presenter picker after one presenter is selected."""
     label = avatar_label(avatar_key) or '所选数字人'
-    return {
-        'config': {'wide_screen_mode': True, 'update_multi': True},
-        'header': {
-            'template': 'green',
-            'title': {'tag': 'plain_text', 'content': f'LEO脚本 {number}｜已选择 {label}'},
-        },
-        'elements': [
-            {'tag': 'markdown', 'content': (
-                f'已选择 **{label}**，数字人选项已锁定，不能重复选择。\n\n'
-                '下一步请确认文案和预计成本。'
-            )},
-        ],
-    }
+    return _workflow_card(
+        number, 'avatar_locked', 'blue', f'已选择 {label}',
+        f'已选择 {label}，数字人选项已锁定。正在准备费用确认……',
+        avatar_key='avatar_b', note='请不用重复点击。')
 
 
 def confirmation_card(record, avatar_key):
@@ -339,98 +358,80 @@ def confirmation_card(record, avatar_key):
     estimate = estimate_video_cost(record['script'])
     minutes, seconds = divmod(estimate['seconds'], 60)
     duration = f'{minutes}分{seconds:02d}秒' if minutes else f'{seconds}秒'
-    return {
-        'config': {'wide_screen_mode': True},
-        'header': {
-            'template': 'orange',
-            'title': {'tag': 'plain_text', 'content': (
-                f'{label}｜脚本 {record["number"]}｜确认生成'
-            )},
-        },
-        'elements': [
-            {'tag': 'markdown', 'content': (
-                f'**{record["title"]}**\n\n'
-                f'预计时长：**约 {duration}**\n'
-                f'预计 API 成本：**约 ${estimate["dollars"]:.2f}**\n\n'
-                '实际费用按最终成片时长计算。确认后只提交一次，不会自动重跑。'
-            )},
-            {'tag': 'action', 'actions': [
-                {
-                    'tag': 'button',
-                    'text': {'tag': 'plain_text', 'content': '确认生成'},
-                    'type': 'primary',
-                    'value': {
-                        'action': 'generate_avatar_video',
-                        'script_number': record['number'],
-                        'avatar_key': avatar_key,
-                    },
-                },
-                {
-                    'tag': 'button',
-                    'text': {'tag': 'plain_text', 'content': '取消生成'},
-                    'type': 'default',
-                    'value': {
-                        'action': 'cancel_avatar_video',
-                        'script_number': record['number'],
-                        'avatar_key': avatar_key,
-                    },
-                },
-            ]},
-        ],
-    }
+    if _is_leo(avatar_key):
+        library, presenter = 'LEO脚本', label
+    else:
+        library = label
+        presenter = (label[:-2] if label.endswith('脚本') else label) + ' 数字人'
+    return _workflow_card(
+        record['number'], 'confirm', 'orange', '确认生成',
+        f'**{record["title"]}**',
+        avatar_key=avatar_key,
+        facts=[('脚本库', library), ('数字人', presenter),
+               ('预计时长', f'约 {duration}'), ('预计 API 成本', f'约 ${estimate["dollars"]:.2f}')],
+        warn='点「确认生成」会向视频平台提交一次付费任务，确认后只提交一次，不会自动重跑。',
+        note='实际费用按最终成片时长计算。',
+        buttons=[
+            _button('确认生成', 'primary', {
+                'action': 'generate_avatar_video',
+                'script_number': record['number'],
+                'avatar_key': avatar_key,
+            }),
+            _button('取消生成', 'default', {
+                'action': 'cancel_avatar_video',
+                'script_number': record['number'],
+                'avatar_key': avatar_key,
+            }),
+        ])
 
 
 def submitted_card(number, avatar_key):
     """Replacement card returned after confirmation; intentionally has no controls."""
-    label = avatar_label(avatar_key) or '所选脚本'
-    return {
-        'config': {'wide_screen_mode': True, 'update_multi': True},
-        'header': {
-            'template': 'green',
-            'title': {'tag': 'plain_text', 'content': f'{label}｜脚本 {number}｜已提交'},
-        },
-        'elements': [
-            {'tag': 'markdown', 'content': (
-                '**视频正在生成中。**\n\n'
-                '确认按钮已锁定，请勿重复提交；完成后会自动回填原表格并通知群聊。'
-            )},
-        ],
-    }
+    return _workflow_card(
+        number, 'submitted', 'green', '已提交，生成中',
+        '**视频正在生成中。** 确认按钮已锁定，请勿重复提交。',
+        avatar_key=avatar_key,
+        note='完成后会通知本群，并把成片链接回填到原表格。')
 
 
 def validating_card(number, avatar_key):
     """Temporary locked state while the provider is deciding whether to accept."""
-    label = avatar_label(avatar_key) or '所选数字人'
-    return {
-        'config': {'wide_screen_mode': True, 'update_multi': True},
-        'header': {
-            'template': 'orange',
-            'title': {'tag': 'plain_text', 'content': f'{label}｜脚本 {number}｜正在校验'},
-        },
-        'elements': [
-            {'tag': 'markdown', 'content': (
-                '**正在请求视频平台确认数字人和声音。**\n\n'
-                '目前尚未确认提交；请勿重复操作。'
-            )},
-        ],
-    }
+    return _workflow_card(
+        number, 'validating', 'orange', '正在校验',
+        '**正在请求视频平台确认数字人和声音。** 目前尚未确认提交，请勿重复操作。',
+        avatar_key=avatar_key, note='确认通过后才会显示「已提交」。')
 
 
 def rejected_card(number, avatar_key, reason):
     """Locked safe failure state; never contains provider IDs or raw responses."""
-    label = avatar_label(avatar_key) or '所选数字人'
-    return {
-        'config': {'wide_screen_mode': True, 'update_multi': True},
-        'header': {
-            'template': 'red',
-            'title': {'tag': 'plain_text', 'content': f'{label}｜脚本 {number}｜未提交'},
-        },
-        'elements': [
-            {'tag': 'markdown', 'content': (
-                f'**安全校验未通过，视频没有进入生成队列。**\n\n原因：{reason}'
-            )},
-        ],
-    }
+    return _workflow_card(
+        number, 'rejected', 'red', '未提交',
+        f'**安全校验未通过，视频没有进入生成队列。**\n原因：{reason}',
+        avatar_key=avatar_key, note='没有提交任何任务，不会扣费。')
+
+
+def cancelled_card(number, avatar_key):
+    """The clicked confirmation card after 取消生成; no controls, nothing was submitted."""
+    return _workflow_card(
+        number, 'cancelled', 'grey', '已取消',
+        f'已取消脚本 **{number}**。任务没有提交，**不会扣费**。',
+        avatar_key=avatar_key, note='需要的话，重新发送编号即可再来一遍。')
+
+
+def notice_card(number, avatar_key, text):
+    """Plain status for a script that is already generating or generated (duplicate guard)."""
+    return _workflow_card(
+        number, 'notice', 'blue', '没有重复提交', text,
+        avatar_key=avatar_key, note='同一条脚本不会被提交两次。')
+
+
+def blocked_card(number, avatar_key, reason, step=0):
+    """The flow cannot continue. Nothing was submitted; `reason` is the safe error text."""
+    return _workflow_card(
+        number, 'blocked', 'red', '无法继续',
+        f'**无法进入下一步。**\n{reason}',
+        avatar_key=avatar_key, blocked_step=step,
+        note='没有提交任何任务，不会扣费。请重新发送编号再试。')
 
 
 def parse_card_action(payload):
