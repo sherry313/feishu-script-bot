@@ -91,8 +91,8 @@ class Feishu:
                                f"错误码 {body.get('code', '未知')}。请检查应用权限、发布状态和文档授权。")
         return body
 
-    def pages(self, suffix):
-        params = {'page_size': 100}
+    def pages(self, suffix, extra_params=None):
+        params = {'page_size': 100, **(extra_params or {})}
         while True:
             data = self.request('GET', self.base + suffix, params=params)['data']
             yield from data.get('items', [])

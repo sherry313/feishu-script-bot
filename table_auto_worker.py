@@ -90,6 +90,21 @@ def _text_since_ms(queue):
     return int(meta['text_since_ms'])
 
 
+# Feishu only returns created_time when asked for it.
+RECORD_PARAMS = {'automatic_fields': 'true'}
+# A plausible millisecond timestamp (2001-09 .. year 5138); rejects seconds, zero, negatives, junk.
+_MIN_MS, _MAX_MS = 10 ** 12, 10 ** 14
+
+
+def valid_created_ms(value):
+    """Return the creation time in ms, or None when it is missing or not trustworthy."""
+    if isinstance(value, bool) or not isinstance(value, (int, float)):
+        return None
+    if value != value or not (_MIN_MS <= value <= _MAX_MS):
+        return None
+    return int(value)
+
+
 def _source_text(fields):
     return text_value(fields.get('口播稿')).strip()
 
@@ -111,7 +126,7 @@ def scan_once(process_existing=False):
     for label, table_id in configured_tables():
         try:
             client = Feishu(table_id=table_id)
-            rows = list(client.pages('/records'))
+            rows = list(client.pages('/records', RECORD_PARAMS))
         except Exception as exc:
             _log.warning('Skipping inaccessible script table %s: %s', label, exc)
             continue
@@ -149,8 +164,8 @@ def scan_once(process_existing=False):
                 continue
             if text_value(fields.get('原视频内容')).strip():
                 continue  # two possible sources: never guess, never auto-rewrite
-            created = row.get('created_time')
-            if not isinstance(created, (int, float)) or isinstance(created, bool):
+            created = valid_created_ms(row.get('created_time'))
+            if created is None:
                 warned = queue['_meta'].setdefault('warned_no_created_time', [])
                 if key not in warned:
                     warned.append(key)

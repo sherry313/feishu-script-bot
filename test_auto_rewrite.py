@@ -41,7 +41,7 @@ class Base(unittest.TestCase):
         # Activate: first scan records the cutoff and the seen-state of history.
         self.rows = []
         self.client = MagicMock()
-        self.client.pages.side_effect = lambda path: iter(self.rows)
+        self.client.pages.side_effect = lambda path, params=None: iter(self.rows)
         feishu = patch.object(worker, 'Feishu', return_value=self.client)
         feishu.start()
         self.patches.append(feishu)
@@ -194,6 +194,62 @@ class DetectionTests(Base):
         self.assertEqual([c['url'] for c in got], ['https://v.douyin.com/good/'])
         self.assertEqual(self.queue()['tbl:n']['attempts'], 0)
         self.assertEqual(self.scan(), [])                       # and only once
+
+    def test_scan_asks_feishu_for_creation_times(self):
+        self.scan()
+        args = self.client.pages.call_args
+        self.assertEqual(args[0][0], '/records')
+        self.assertEqual(args[0][1], {'automatic_fields': 'true'})
+
+    def test_timestamp_validation(self):
+        v = worker.valid_created_ms
+        self.assertEqual(v(1794881117000), 1794881117000)
+        self.assertEqual(v(1794881117000.0), 1794881117000)
+        for bad in (None, '1794881117000', True, 0, -5, 1794881117, 10 ** 15,
+                    float('nan'), float('inf'), [], {}):
+            self.assertIsNone(v(bad), repr(bad))
+
+    def test_timestamp_in_seconds_is_not_trusted(self):
+        self.scan()
+        self.rows = [row('r', int(NOW), **{'口播稿': '稿'})]
+        with self.assertLogs('uvicorn.error', level='WARNING'):
+            self.scan()
+        self.assertNotIn('tbl:r', self.queue())
+
+    def test_all_three_libraries_are_scanned_with_the_parameter(self):
+        seen = []
+        clients = {}
+
+        def make(table_id):
+            client = MagicMock()
+            client.pages.side_effect = lambda path, params=None: (
+                seen.append((table_id, params)) or iter([]))
+            clients[table_id] = client
+            return client
+
+        with patch.object(worker, 'Feishu', side_effect=lambda table_id: make(table_id)), \
+                patch.object(worker, 'configured_tables',
+                             lambda: [('LEO', 'a'), ('Libby', 'b'), ('Chen', 'c')]):
+            self.scan()
+        self.assertEqual(seen, [('a', {'automatic_fields': 'true'}),
+                                ('b', {'automatic_fields': 'true'}),
+                                ('c', {'automatic_fields': 'true'})])
+
+    def test_one_failing_library_does_not_stop_the_others(self):
+        good = MagicMock()
+        good.pages.side_effect = lambda path, params=None: iter(
+            [row('n', AFTER, **{'口播稿': '稿'})])
+        bad = MagicMock()
+        bad.pages.side_effect = RuntimeError('permission denied')
+        clients = iter([bad, good])
+        with patch.object(worker, 'Feishu', side_effect=lambda table_id: next(clients)), \
+                patch.object(worker, 'configured_tables',
+                             lambda: [('LEO', 'a'), ('Libby', 'b')]):
+            with self.assertLogs('uvicorn.error', level='WARNING'):
+                self.scan()
+            clients = iter([bad, good])
+            self.scan()
+        self.assertEqual(self.queue()['b:n']['status'], 'pending')
 
     def test_link_flow_is_preserved(self):
         self.rows = [row('old', BEFORE, **{'视频链接': 'https://v.douyin.com/o/'})]
@@ -361,6 +417,41 @@ class RetryTests(Base):
             worker.watch_forever(lock, stop, interval=0)
         self.assertEqual(calls, ['tbl:r'])
         self.assertFalse(lock.locked())
+
+
+class PaginationTests(unittest.TestCase):
+    def test_pages_keeps_extra_params_on_every_page_and_follows_tokens(self):
+        from feishu_sync import Feishu
+        client = Feishu.__new__(Feishu)
+        client.base = '/b'
+        calls = []
+        replies = iter([
+            {'data': {'items': [{'record_id': '1'}], 'has_more': True, 'page_token': 't1'}},
+            {'data': {'items': [{'record_id': '2'}], 'has_more': True, 'page_token': 't2'}},
+            {'data': {'items': [{'record_id': '3'}], 'has_more': False}},
+        ])
+
+        def request(method, url, params=None, **kw):
+            calls.append((method, dict(params)))
+            return next(replies)
+
+        client.request = request
+        items = list(client.pages('/records', {'automatic_fields': 'true'}))
+        self.assertEqual([i['record_id'] for i in items], ['1', '2', '3'])
+        self.assertEqual([c[0] for c in calls], ['GET'] * 3)
+        self.assertTrue(all(c[1]['automatic_fields'] == 'true' and c[1]['page_size'] == 100
+                            for c in calls))
+        self.assertEqual([c[1].get('page_token') for c in calls], [None, 't1', 't2'])
+
+    def test_pages_without_extra_params_is_unchanged(self):
+        from feishu_sync import Feishu
+        client = Feishu.__new__(Feishu)
+        client.base = '/b'
+        seen = []
+        client.request = lambda m, u, params=None, **k: (
+            seen.append(dict(params)) or {'data': {'items': [], 'has_more': False}})
+        list(client.pages('/fields'))
+        self.assertEqual(seen, [{'page_size': 100}])
 
 
 class FakeFeishu:
