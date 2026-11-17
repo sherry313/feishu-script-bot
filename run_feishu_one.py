@@ -42,7 +42,8 @@ def main():
     source = text_value(before.get(source_field))
     if not source:
         raise RuntimeError('首条缺原文，请使用持久化taskId的转写流程后续跑；未跳过该条')
-    c.request('PUT', c.base+'/records/'+rid, json={'fields':{'视频链接':before['视频链接']}})
+    if before.get('视频链接'):
+        c.request('PUT', c.base+'/records/'+rid, json={'fields':{'视频链接':before['视频链接']}})
     model = cfg('CLAUDE_MODEL', 'claude-sonnet-5')
     key_material = rid + source + model + 'rules-v2-60-90sec'
     if args.redo_record:

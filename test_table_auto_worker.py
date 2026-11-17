@@ -23,12 +23,14 @@ class TableAutoWorkerTests(unittest.TestCase):
         with patch.dict(os.environ, values, clear=False):
             self.assertEqual(configured_tables(), [('LEO', 'same')])
 
+    @patch('table_auto_worker._qsave')
+    @patch('table_auto_worker._qload', return_value={})
     @patch('table_auto_worker._save')
     @patch('table_auto_worker._load', return_value={'existing': 'state'})
     @patch('table_auto_worker.Feishu')
     @patch('table_auto_worker.configured_tables', return_value=[
         ('LEO', 'leo'), ('Libby', 'libby')])
-    def test_inaccessible_table_does_not_stop_other_tables(self, tables, feishu, load, save):
+    def test_inaccessible_table_does_not_stop_other_tables(self, tables, feishu, load, save, qload, qsave):
         bad = unittest.mock.Mock()
         bad.pages.side_effect = RuntimeError('permission denied')
         good = unittest.mock.Mock()
