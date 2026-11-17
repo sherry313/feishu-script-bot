@@ -260,21 +260,14 @@ def approve_rewrite(chat_id, action):
 
 
 def send_avatar_picker(chat_id, number):
+    """Always offer every script library. No table is read before the click.
+
+    The lookup, the empty-script check and the safety checks all run after the
+    user chooses a library (route_leo_selection / send_avatar_confirmation), so a
+    slow or rate-limited Feishu table can never hide an option.
+    """
     try:
-        available = []
-        unavailable = []
-        for choice in avatar_choices():
-            try:
-                source = avatar_source(choice['key'])
-                script_record(Feishu(table_id=source['table_id']), number,
-                              source['view_id'], source['library'])
-                available.append(choice)
-            except Exception as exc:
-                unavailable.append(f'{choice["label"]}（{exc}）')
-        if not available:
-            send_text(chat_id, f'编号 {number} 在三个脚本库中都没有可生成的“改写一”，未进入生成流程。')
-            return
-        send_card(chat_id, avatar_card(number, available, unavailable))
+        send_card(chat_id, avatar_card(number, avatar_choices()))
     except Exception as exc:
         logger.exception('Failed to prepare avatar picker')
         send_text(chat_id, str(exc))
